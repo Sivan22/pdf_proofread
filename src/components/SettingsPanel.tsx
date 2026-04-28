@@ -20,7 +20,7 @@ const ROUTE_LABELS: Record<Route, string> = {
 const KEY_URLS: Record<Route, string> = {
   anthropic: 'https://console.anthropic.com/settings/keys',
   google: 'https://aistudio.google.com/apikey',
-  gateway: 'https://vercel.com/dashboard/ai-gateway',
+  gateway: 'https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%3FshowCreateKeyModal%26utm_source%3Dai_gateway_landing_page&title=Get+an+API+Key',
 };
 
 const ALL_MODELS: Model[] = ['claude-opus-4-7', 'gemini-3.1-pro'];
