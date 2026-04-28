@@ -17,6 +17,12 @@ const ROUTE_LABELS: Record<Route, string> = {
   gateway: 'Vercel AI Gateway',
 };
 
+const KEY_URLS: Record<Route, string> = {
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  google: 'https://aistudio.google.com/apikey',
+  gateway: 'https://vercel.com/dashboard/ai-gateway',
+};
+
 const ALL_MODELS: Model[] = ['claude-opus-4-7', 'gemini-3.1-pro'];
 
 export function SettingsPanel({ settings, onChange }: Props) {
@@ -49,7 +55,7 @@ export function SettingsPanel({ settings, onChange }: Props) {
       {open && (
         <CardContent className="grid gap-4">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <span className="text-sm font-medium">נתיב:</span>
+            <span className="text-sm font-medium">ספק:</span>
             {(['anthropic', 'google', 'gateway'] as Route[]).map((r) => (
               <label key={r} className="inline-flex cursor-pointer items-center gap-2 text-sm">
                 <input
@@ -78,7 +84,17 @@ export function SettingsPanel({ settings, onChange }: Props) {
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="api-key">API key ({ROUTE_LABELS[settings.route]})</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="api-key">API key ({ROUTE_LABELS[settings.route]})</Label>
+              <a
+                href={KEY_URLS[settings.route]}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary underline-offset-2 hover:underline"
+              >
+                קבל מפתח ↗
+              </a>
+            </div>
             <Input
               id="api-key"
               type="password"
