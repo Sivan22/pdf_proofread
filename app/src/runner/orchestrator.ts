@@ -69,6 +69,7 @@ export async function runProofread(opts: RunOptions): Promise<RunResult> {
           const prompt = buildPrompt(settings.prompt, pageNums, existing);
           const errs = await analyzePages({
             model,
+            modelName: settings.model,
             pdfBytes,
             pageNums,
             prompt,
