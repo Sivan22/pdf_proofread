@@ -1,4 +1,6 @@
 import type { RunResult } from '../runner/orchestrator';
+import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
 
 interface Props {
   result: RunResult | null;
@@ -15,18 +17,24 @@ export function Results({ result, baseName }: Props) {
   const jsonUrl = URL.createObjectURL(jsonBlob);
 
   return (
-    <section style={{ border: '1px solid #ccc', borderRadius: 8, padding: 12 }}>
-      <div>
-        סה"כ {result.errors.length} טעויות — {anchored} עוגנו, {unmatched} ללא עיגון
-      </div>
-      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-        <a href={pdfUrl} download={`${baseName}_reviewed.pdf`}>
-          <button>הורד PDF</button>
-        </a>
-        <a href={jsonUrl} download={`${baseName}_errors.json`}>
-          <button>הורד JSON</button>
-        </a>
-      </div>
-    </section>
+    <Card>
+      <CardContent className="pt-6">
+        <div className="text-sm">
+          סה"כ {result.errors.length} טעויות — {anchored} עוגנו, {unmatched} ללא עיגון
+        </div>
+        <div className="mt-3 flex gap-2">
+          <Button asChild>
+            <a href={pdfUrl} download={`${baseName}_reviewed.pdf`}>
+              הורד PDF
+            </a>
+          </Button>
+          <Button asChild>
+            <a href={jsonUrl} download={`${baseName}_errors.json`}>
+              הורד JSON
+            </a>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

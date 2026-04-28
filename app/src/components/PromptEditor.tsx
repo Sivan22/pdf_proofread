@@ -1,5 +1,9 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronLeft, RotateCcw } from 'lucide-react';
 import { DEFAULT_PROMPT } from '../runner/prompt';
+import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
+import { Textarea } from './ui/textarea';
 
 interface Props {
   prompt: string;
@@ -9,23 +13,38 @@ interface Props {
 export function PromptEditor({ prompt, onChange }: Props) {
   const [open, setOpen] = useState(false);
   return (
-    <section style={{ border: '1px solid #ccc', borderRadius: 8, padding: 12, marginBottom: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <button onClick={() => setOpen(!open)}>
-          פרומפט {open ? '▾' : '▸'}
+    <Card>
+      <div className="flex items-center justify-between gap-2 px-6 py-4">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-2 text-sm font-medium hover:text-accent-foreground"
+        >
+          פרומפט
+          {open ? <ChevronDown className="size-4" /> : <ChevronLeft className="size-4" />}
         </button>
         {open && (
-          <button onClick={() => onChange(DEFAULT_PROMPT)}>איפוס לברירת מחדל</button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onChange(DEFAULT_PROMPT)}
+          >
+            <RotateCcw />
+            איפוס לברירת מחדל
+          </Button>
         )}
       </div>
       {open && (
-        <textarea
-          value={prompt}
-          onChange={(e) => onChange(e.target.value)}
-          rows={20}
-          style={{ width: '100%', marginTop: 8, fontFamily: 'monospace', direction: 'rtl' }}
-        />
+        <CardContent>
+          <Textarea
+            value={prompt}
+            onChange={(e) => onChange(e.target.value)}
+            rows={20}
+            dir="rtl"
+            className="font-mono"
+          />
+        </CardContent>
       )}
-    </section>
+    </Card>
   );
 }

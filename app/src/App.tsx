@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { RotateCcw } from 'lucide-react';
 import { FileDrop } from './components/FileDrop';
 import { Parameters } from './components/Parameters';
 import { ProgressLog } from './components/ProgressLog';
 import { PromptEditor } from './components/PromptEditor';
 import { Results } from './components/Results';
 import { SettingsPanel } from './components/SettingsPanel';
+import { Alert, AlertDescription } from './components/ui/alert';
+import { Button } from './components/ui/button';
 import { isRouteModelValid } from './ai/providers';
 import { openPdf } from './pdf/mupdf';
 import { runProofread } from './runner/orchestrator';
@@ -96,26 +99,36 @@ export default function App() {
   };
 
   return (
-    <div style={{ maxWidth: 880, margin: '0 auto', padding: 24, direction: 'rtl' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>PDF Proofread</h1>
-        <button onClick={reset} title="איפוס הגדרות">⟲</button>
+    <div dir="rtl" className="mx-auto max-w-3xl px-6 py-8">
+      <header className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">PDF Proofread</h1>
+        <Button variant="ghost" size="icon" onClick={reset} title="איפוס הגדרות">
+          <RotateCcw />
+        </Button>
       </header>
 
-      <SettingsPanel settings={settings} onChange={setSettings} />
-      <FileDrop file={file} pageCount={pageCount} onFile={setFile} />
-      <Parameters settings={settings} pageCount={pageCount} onChange={setSettings} />
-      <PromptEditor prompt={settings.prompt} onChange={(p) => setSettings({ ...settings, prompt: p })} />
+      <div className="space-y-4">
+        <SettingsPanel settings={settings} onChange={setSettings} />
+        <FileDrop file={file} pageCount={pageCount} onFile={setFile} />
+        <Parameters settings={settings} pageCount={pageCount} onChange={setSettings} />
+        <PromptEditor prompt={settings.prompt} onChange={(p) => setSettings({ ...settings, prompt: p })} />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <button onClick={onRun} disabled={!canRun}>הרץ</button>
-        {running && <button onClick={onCancel}>ביטול</button>}
+        <div className="flex gap-2">
+          <Button onClick={onRun} disabled={!canRun}>הרץ</Button>
+          {running && (
+            <Button variant="outline" onClick={onCancel}>ביטול</Button>
+          )}
+        </div>
+
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>שגיאה: {error}</AlertDescription>
+          </Alert>
+        )}
+
+        <ProgressLog batches={batches} />
+        <Results result={result} baseName={baseName} />
       </div>
-
-      {error && <div style={{ color: 'crimson', marginBottom: 12 }}>שגיאה: {error}</div>}
-
-      <ProgressLog batches={batches} />
-      <Results result={result} baseName={baseName} />
     </div>
   );
 }
