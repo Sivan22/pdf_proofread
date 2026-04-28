@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { RotateCcw } from 'lucide-react';
 import { FileDrop } from './components/FileDrop';
 import { Parameters } from './components/Parameters';
 import { ProgressLog } from './components/ProgressLog';
@@ -13,7 +12,7 @@ import { openPdf } from './pdf/mupdf';
 import { runProofread } from './runner/orchestrator';
 import type { BatchProgress, RunResult } from './runner/orchestrator';
 import { DEFAULT_PROMPT } from './runner/prompt';
-import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './store/settings';
+import { loadSettings, saveSettings, type Settings } from './store/settings';
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -94,17 +93,10 @@ export default function App() {
 
   const onCancel = () => abortRef.current?.abort();
 
-  const reset = () => {
-    if (confirm('לאפס את כל ההגדרות?')) setSettings(DEFAULT_SETTINGS);
-  };
-
   return (
     <div dir="rtl" className="mx-auto max-w-3xl px-6 py-8">
-      <header className="mb-6 flex items-center justify-between">
+      <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">PDF Proofread</h1>
-        <Button variant="ghost" size="icon" onClick={reset} title="איפוס הגדרות">
-          <RotateCcw />
-        </Button>
       </header>
 
       <div className="space-y-4">
