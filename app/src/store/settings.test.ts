@@ -3,14 +3,14 @@ import { DEFAULT_SETTINGS, loadSettings, saveSettings } from './settings';
 
 beforeEach(() => {
   // jsdom or happy-dom localStorage shim
+  const data = new Map<string, string>();
   globalThis.localStorage = {
-    _data: new Map<string, string>(),
-    getItem(k: string) { return this._data.get(k) ?? null; },
-    setItem(k: string, v: string) { this._data.set(k, v); },
-    removeItem(k: string) { this._data.delete(k); },
-    clear() { this._data.clear(); },
-    key(i: number) { return [...this._data.keys()][i] ?? null; },
-    get length() { return this._data.size; },
+    getItem(k: string) { return data.get(k) ?? null; },
+    setItem(k: string, v: string) { data.set(k, v); },
+    removeItem(k: string) { data.delete(k); },
+    clear() { data.clear(); },
+    key(i: number) { return [...data.keys()][i] ?? null; },
+    get length() { return data.size; },
   } as unknown as Storage;
 });
 
