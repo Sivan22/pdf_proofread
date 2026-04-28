@@ -95,7 +95,8 @@ export default function App() {
 
   return (
     <div dir="rtl" className="mx-auto max-w-3xl px-6 py-8">
-      <header className="mb-6">
+      <header className="mb-6 flex items-center gap-3">
+        <img src="logo.png" alt="" className="size-10" />
         <h1 className="text-2xl font-semibold tracking-tight">PDF Proofread</h1>
       </header>
 

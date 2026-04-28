@@ -1,4 +1,8 @@
-# PDF Proofread
+<p align="center">
+  <img src="public/logo.png" alt="PDF Proofread logo" width="120" />
+</p>
+
+<h1 align="center">PDF Proofread</h1>
 
 A static, browser-based app that proofreads Hebrew PDFs for technical editing
 errors using an LLM (Claude Opus 4.7 or Gemini 3.1 Pro) and writes the model's
