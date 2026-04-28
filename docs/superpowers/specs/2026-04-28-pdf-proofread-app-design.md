@@ -190,7 +190,16 @@ pdf_proofread/
          └─ prompt.ts              # default Hebrew template + placeholder substitution
 ```
 
-## 12. Out of scope
+## 12. Deployment
+
+The app is a fully static SPA, deployed to GitHub Pages via a workflow that mirrors `autoOffice`:
+
+- `vite.config.ts` reads `base` from `process.env.VITE_BASE` so it can be set to the repo subpath at build time.
+- `.github/workflows/deploy.yml` runs on push to `main`/`master`: `npm ci` → `npm run build` (with `VITE_BASE=/pdf_proofread/`) → `actions/upload-pages-artifact@v3` → `actions/deploy-pages@v4`.
+- One-time manual step by the repo owner: in GitHub repo settings → Pages, set Source to "GitHub Actions".
+- Result: app is served at `https://<user>.github.io/pdf_proofread/`. API keys still live exclusively in the visitor's browser; the static origin holds no secrets.
+
+## 13. Out of scope
 
 - The Stage-2 viewer and comments sidebar.
 - Run history, multi-document queues, server-side execution.
