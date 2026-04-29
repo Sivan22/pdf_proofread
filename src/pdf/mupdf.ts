@@ -1,4 +1,6 @@
 import * as mupdf from 'mupdf';
+import { findText } from './textmap';
+import type { PageContent } from './textmap';
 
 export interface ProofError {
   page: number;
@@ -49,39 +51,40 @@ export function readExistingAnnotations(
 }
 
 /**
- * Build a brand-new sub-PDF that contains only the requested pages of `doc`,
- * grafted over in the order given. Pages are 0-indexed.
- */
-export function extractBatchPdf(
-  doc: mupdf.PDFDocument,
-  pageNums: number[],
-): Uint8Array {
-  const sub = new mupdf.PDFDocument();
-  for (const pageNum of pageNums) {
-    sub.graftPage(-1, doc, pageNum);
-  }
-  const buffer = sub.saveToBuffer('');
-  return buffer.asUint8Array();
-}
-
-/**
  * Annotate a single proofreading error onto the document.
  *
  * Strategy:
- *   1. Try to find the exact `err.text` on `err.page` (1-indexed). If found,
- *      add a yellow highlight with `טעות / תיקון` in the contents → 'exact'.
- *   2. Otherwise, scan words longer than 2 chars and add an orange highlight
- *      around the first hit with `[חיפוש: ...]` prefixed → 'partial'.
- *   3. Otherwise, return 'unmatched' without touching the doc.
+ *   1. If a textmap is provided, try `findText`. Yellow → 'exact' when the
+ *      whitespace/bracket-normalised pass hit, orange → 'partial' when only
+ *      the letter-only fallback located the region.
+ *   2. Otherwise try mupdf's `page.search` for the whole quote. Yellow → 'exact'.
+ *   3. Otherwise scan whitespace-split words > 2 chars and highlight the first
+ *      hit. Orange with `[חיפוש: ...]` prefix → 'partial'.
+ *   4. Otherwise return 'unmatched' without touching the doc.
  */
 export function annotateError(
   doc: mupdf.PDFDocument,
   err: ProofError,
+  pageContent?: PageContent,
 ): 'exact' | 'partial' | 'unmatched' {
   const pageIdx = err.page - 1;
   if (pageIdx < 0 || pageIdx >= doc.countPages()) return 'unmatched';
   const page = doc.loadPage(pageIdx);
   const comment = `טעות: ${err.error}\nתיקון: ${err.fix}`;
+
+  if (pageContent) {
+    const tm = findText(pageContent.blocks, err.text);
+    if (tm && tm.quads.length > 0) {
+      const isExact = tm.precision === 'exact';
+      addHighlight(
+        page,
+        tm.quads,
+        isExact ? comment : `[חיפוש: ${err.text}]\n${comment}`,
+        isExact ? [1, 1, 0] : [1, 0.7, 0],
+      );
+      return tm.precision;
+    }
+  }
 
   const exact = page.search(err.text);
   if (exact && exact.length > 0) {

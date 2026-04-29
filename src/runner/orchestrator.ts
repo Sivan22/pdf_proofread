@@ -1,14 +1,16 @@
 import { createModel } from '../ai/providers';
 import { analyzePages } from '../ai/analyze';
+import type { AnalyzePage } from '../ai/analyze';
 import { generateBatches } from '../pdf/batches';
 import {
   annotateError,
-  extractBatchPdf,
   openPdf,
   readExistingAnnotations,
   saveAnnotated,
 } from '../pdf/mupdf';
 import type { ProofError } from '../pdf/mupdf';
+import { extractPageContent, formatBlocksForLLM } from '../pdf/textmap';
+import type { PageContent } from '../pdf/textmap';
 import { buildPrompt } from './prompt';
 import type { Settings } from '../store/settings';
 
@@ -57,6 +59,7 @@ export async function runProofread(opts: RunOptions): Promise<RunResult> {
   const sem = new Semaphore(limit);
 
   const allRaw: { batch: number; errs: Omit<ProofError, 'match'>[] }[] = [];
+  const pageContents = new Map<number, PageContent>();
 
   await Promise.all(
     batches.map((pageNums, index) =>
@@ -65,12 +68,23 @@ export async function runProofread(opts: RunOptions): Promise<RunResult> {
         onProgress({ index, pageNums, status: 'running' });
         try {
           const existing = readExistingAnnotations(doc, pageNums);
-          const pdfBytes = extractBatchPdf(doc, pageNums);
+          const pages: AnalyzePage[] = pageNums.map((pageIdx, i) => {
+            let pc = pageContents.get(pageIdx);
+            if (!pc) {
+              pc = extractPageContent(doc, pageIdx);
+              pageContents.set(pageIdx, pc);
+            }
+            return {
+              localPageNum: i + 1,
+              imagePng: pc.imagePng,
+              text: formatBlocksForLLM(pc.blocks),
+            };
+          });
           const prompt = buildPrompt(settings.prompt, pageNums, existing);
           const errs = await analyzePages({
             model,
             modelName: settings.model,
-            pdfBytes,
+            pages,
             pageNums,
             prompt,
             abortSignal,
@@ -93,7 +107,8 @@ export async function runProofread(opts: RunOptions): Promise<RunResult> {
       const key = `${e.page}|${e.text}|${e.error}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const match = annotateError(doc, { ...e, match: 'unmatched' });
+      const pc = pageContents.get(e.page - 1);
+      const match = annotateError(doc, { ...e, match: 'unmatched' }, pc);
       finalErrors.push({ ...e, match });
     }
   }

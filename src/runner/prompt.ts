@@ -1,4 +1,4 @@
-export const DEFAULT_PROMPT = `בדוק את קובץ הPDF הזה ומצא טעויות טכניות ברורות.
+export const DEFAULT_PROMPT = `בדוק את העמודים הבאים (תמונה + טקסט מחולץ לכל עמוד) ומצא טעויות טכניות ברורות.
 
 
 חפש רק טעויות טכניות ברורות:
@@ -24,19 +24,17 @@ export const DEFAULT_PROMPT = `בדוק את קובץ הPDF הזה ומצא טע
 אם אין טעויות ודאיות, החזר: []
 
 אם יש, החזר JSON בלבד:
-[{"page": <מספר עמוד בPDF>, "text": "הטקסט המדויק מהעמוד", "error": "תיאור קצר", "fix": "התיקון"}]
+[{"page": <מספר עמוד>, "text": "הטקסט המדויק מהעמוד", "error": "תיאור קצר", "fix": "התיקון"}]
 
-שים לב: מספר העמוד הוא המספר בתוך ה-PDF ששלחתי (1 עד {batch_size}), לא המספר המקורי.
+שים לב לגבי שדה "text":
+- חובה להעתיק את מחרוזת ה-text מילה-במילה מהטקסט המחולץ של אותו עמוד (Copy-Paste), כולל אותם תווים, אותם רווחים ואותם סוגריים בדיוק כפי שהם בטקסט המחולץ.
+- אל תסדר מחדש סוגריים, פסיקים או רווחים על-פי המראה החזותי בתמונה — אם בטקסט המחולץ כתוב ")אות שלה(" אז זה הציטוט, גם אם בתמונה זה נראה "(אות שלה)". המערכת מאתרת את הטעות לפי הציטוט המדויק; ציטוט "מתוקן" יגרום לפספוס.
+- רק אם הטקסט לא קיים כלל בחילוץ (פונט-תמונה), הסתמך על התמונה.
 
-הנה התוכן של הדף: {page_context}
+מספר העמוד הוא המספר המקומי בתוך הבאצ' (1 עד {batch_size}), לא המספר המקורי.
 
 הנה הערות קיימות: {existing_comments}
 `;
-
-function pageContext(pageNums: number[]): string {
-  if (pageNums.length === 1) return `עמוד ${pageNums[0] + 1}`;
-  return `עמודים ${pageNums[0] + 1}-${pageNums[pageNums.length - 1] + 1}`;
-}
 
 function existingCommentsBlock(
   pageNums: number[],
@@ -60,7 +58,6 @@ export function buildPrompt(
   existing: Record<number, string[]>,
 ): string {
   return template
-    .replaceAll('{page_context}', pageContext(pageNums))
     .replaceAll('{batch_size}', String(pageNums.length))
     .replaceAll('{existing_comments}', existingCommentsBlock(pageNums, existing));
 }
