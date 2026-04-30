@@ -40,13 +40,170 @@ export interface TextMatch {
   precision: 'exact' | 'partial';
 }
 
+interface RawChar {
+  ch: string;
+  quad: mupdf.Quad;
+  font: string;
+}
 interface RawLine {
   bbox: mupdf.Rect;
-  chars: { ch: string; quad: mupdf.Quad }[];
+  chars: RawChar[];
 }
 interface RawBlock {
   bbox: mupdf.Rect;
   lines: RawLine[];
+}
+
+/**
+ * Some PDFs (typesetting tools that pre-date proper Unicode font support)
+ * embed Hebrew via fonts with a CP1255-style codepage mapping and no
+ * `ToUnicode` CMap. mupdf then reports the raw byte values as Latin-1
+ * supplement characters: e.g. `øäåæ` for what visually renders as `זוהר`.
+ * The bytes 0xE0-0xFA line up 1-to-1 with U+05D0-U+05EA, and the runs are
+ * stored visual-LTR (so a logical Hebrew word looks reversed). Mapping
+ * the bytes plus reversing the run recovers real Hebrew.
+ *
+ * We work at the **run** level inside a line, not the whole line —
+ * footnotes commonly mix one good-Hebrew sentence with a glyph-encoded
+ * citation, and reversing real Hebrew would corrupt it. A run is a
+ * contiguous sequence of Latin-1 supplement bytes (allowing intervening
+ * ASCII whitespace/punctuation, which a CP1255 font also emits as ASCII
+ * codepoints).
+ */
+function isCp1255Hebrew(cp: number): boolean {
+  return cp >= 0xE0 && cp <= 0xFA;
+}
+function isLatin1Mojibake(cp: number): boolean {
+  return cp >= 0x00C0 && cp <= 0x00FF;
+}
+function isAsciiPrintable(cp: number): boolean {
+  return cp >= 0x20 && cp <= 0x7E;
+}
+
+/**
+ * Some Hebrew typesetting fonts spell nikkud as ASCII upper-letter glyph
+ * slots (F, H, N, U, X, Y, Q, R, S, T, V, W, Z) and as Latin-1 chars in
+ * the 0xC0-0xDF / 0xFB-0xFF range. After demojibake those are still in
+ * the stream and would corrupt the searches. We strip them block-by-block
+ * (not line-by-line) so a line of pure noise inside an otherwise-Hebrew
+ * block also gets cleaned. Blocks with no Hebrew at all are left alone
+ * — that preserves legitimate accented-Latin documents.
+ */
+function stripNikkudGlyphsInBlock(raw: RawBlock): void {
+  const isHeb = (cp: number) => cp >= 0x0590 && cp <= 0x05FF;
+  let hebCount = 0;
+  for (const line of raw.lines) {
+    for (const c of line.chars) {
+      if (isHeb(c.ch.codePointAt(0) ?? 0)) hebCount++;
+    }
+  }
+  if (hebCount === 0) return;
+  for (const line of raw.lines) {
+    line.chars = line.chars.filter((c) => {
+      const cp = c.ch.codePointAt(0) ?? 0;
+      // Latin-1 supplement chars left after demojibake are unmapped font
+      // noise (the font's nikkud-glyph slots).
+      if (cp >= 0x00A0 && cp <= 0x00FF) return false;
+      // Any Latin letter inside a Hebrew block is — virtually always — a
+      // nikkud glyph slot (Q, U, X, c, etc.). Real English words are rare
+      // in a Hebrew document and the trade-off keeps searches clean.
+      if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A)) return false;
+      // Underscore — common vowel-mark slot.
+      if (cp === 0x5F) return false;
+      return true;
+    });
+  }
+}
+
+/**
+ * Per-font glyph-slot mappings for Hebrew typesetting fonts that route some
+ * letters through ASCII or extended-Latin codepoints (no `ToUnicode` CMap
+ * to recover them).
+ *
+ * Key is a substring of the mupdf-reported font name (after the `+` subset
+ * prefix). Value maps a single source char to its Hebrew letter — empty
+ * string means "drop this glyph slot" (typically a nikkud / cantillation
+ * mark we don't need for proofreading).
+ *
+ * Today we know the "Z_*" Bnei Baruch–style fonts: F and H are forms of
+ * ש (with shin/sin dot baked in), X is י, the rest are vocalisation glyphs.
+ * Add more entries here as we encounter new fonts.
+ */
+const FONT_GLYPH_MAP: Record<string, Record<string, string>> = {
+  // Bnei-Baruch / Z_FR family — verified from page-1 verse "ויהי חיי שרה ...":
+  // F and H both render as ש (with the shin or sin dot baked in), X is a
+  // long-style י. Other ASCII-letter slots (U, Q, S, T, V, Z, J, A, B, _)
+  // are punctuation / cantillation glyphs that we'd rather drop than guess.
+  Z_FR: { F: 'ש', H: 'ש', X: 'י' },
+  Z_Vilna: { F: 'ש', H: 'ש', X: 'י' },
+  Z_Margalit: { F: 'ש', H: 'ש', X: 'י' },
+};
+
+function fontGlyph(fontName: string, ch: string): string | undefined {
+  for (const key of Object.keys(FONT_GLYPH_MAP)) {
+    if (fontName.includes(key)) {
+      return FONT_GLYPH_MAP[key][ch];
+    }
+  }
+  return undefined;
+}
+
+function fixMojibakeRuns(chars: RawChar[]): RawChar[] {
+  const result: RawChar[] = [];
+  let i = 0;
+  while (i < chars.length) {
+    const cp = chars[i].ch.codePointAt(0) ?? 0;
+    // Anchor a run on a Latin-1 char that's in the CP1255 Hebrew block.
+    if (!isCp1255Hebrew(cp)) {
+      result.push(chars[i]);
+      i++;
+      continue;
+    }
+    // Extend greedily while we keep seeing CP1255 Hebrew, Latin-1 bytes
+    // or ASCII printables. This captures glyph-encoded Hebrew with
+    // embedded ASCII spaces/quotes/digits.
+    let j = i;
+    while (j < chars.length) {
+      const c = chars[j].ch.codePointAt(0) ?? 0;
+      if (isCp1255Hebrew(c) || isAsciiPrintable(c) || isLatin1Mojibake(c)) {
+        j++;
+      } else {
+        break;
+      }
+    }
+    // Trim trailing chars that aren't CP1255 Hebrew — they probably
+    // belong to the next, real-Hebrew run.
+    while (j > i + 1) {
+      const c = chars[j - 1].ch.codePointAt(0) ?? 0;
+      if (isCp1255Hebrew(c) || isLatin1Mojibake(c)) break;
+      j--;
+    }
+
+    const run: RawChar[] = [];
+    for (let k = i; k < j; k++) {
+      const c = chars[k];
+      const cp2 = c.ch.codePointAt(0) ?? 0;
+      if (isCp1255Hebrew(cp2)) {
+        run.push({ ...c, ch: String.fromCodePoint(cp2 - 0xE0 + 0x05D0) });
+        continue;
+      }
+      // ASCII letters / underscore / extended-Latin: consult the font
+      // glyph map. Empty string means "drop"; non-empty maps to a
+      // recovered Hebrew letter; undefined falls through.
+      const mapped = fontGlyph(c.font, c.ch);
+      if (mapped !== undefined) {
+        if (mapped) run.push({ ...c, ch: mapped });
+        continue;
+      }
+      // Default: keep ASCII printable, drop anything else. The strip
+      // pass below will scrub remaining noise at block level.
+      if (isAsciiPrintable(cp2)) run.push(c);
+    }
+    run.reverse();
+    result.push(...run);
+    i = j;
+  }
+  return result;
 }
 
 export function extractPageContent(
@@ -87,13 +244,21 @@ export function extractPageContent(
       curLine = { bbox, chars: [] };
     },
     endLine() {
-      if (curLine && curBlock) curBlock.lines.push(curLine);
+      if (curLine && curBlock) {
+        curLine.chars = fixMojibakeRuns(curLine.chars);
+        curBlock.lines.push(curLine);
+      }
       curLine = null;
     },
-    onChar(ch, _origin, _font, _size, quad) {
-      curLine?.chars.push({ ch, quad });
+    onChar(ch, _origin, font, _size, quad) {
+      const fontName = (font && typeof font.getName === 'function' ? font.getName() : '') ?? '';
+      curLine?.chars.push({ ch, quad, font: fontName });
     },
   });
+
+  for (const raw of rawBlocks) {
+    stripNikkudGlyphsInBlock(raw);
+  }
 
   const blocks: TextBlock[] = [];
   for (const raw of rawBlocks) {
