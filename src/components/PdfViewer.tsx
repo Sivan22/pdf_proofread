@@ -11,6 +11,16 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export interface PdfViewerHandle {
   scrollToPage: (pageNum: number) => void;
+  /**
+   * Scroll so a specific rect on `pageNum` is visible. `rect` is in PDF points
+   * using mupdf top-left origin (matches `Rect` in mupdf.ts). The rect's
+   * vertical center is positioned ~⅓ from the top of the viewport so the user
+   * has context above the highlight.
+   */
+  scrollToRect: (
+    pageNum: number,
+    rect: { y0: number; y1: number },
+  ) => void;
 }
 
 export interface PdfPageMeta {
@@ -87,8 +97,29 @@ export const PdfViewer = forwardRef<PdfViewerHandle, PdfViewerProps>(function Pd
         if (!el) return;
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       },
+      scrollToRect(pageNum, rect) {
+        const el = pageRefs.current.get(pageNum);
+        const meta = pageMetas.find((m) => m.pageNum === pageNum);
+        const container = containerRef.current;
+        if (!el || !meta || !container) return;
+        // Page-element top relative to the scroll container, independent of
+        // offsetParent quirks. `scrollTop` accounts for current scroll.
+        const pageTop =
+          el.getBoundingClientRect().top -
+          container.getBoundingClientRect().top +
+          container.scrollTop;
+        // CSS y for the rect's center. mupdf-top-left origin maps to viewport
+        // y as `y * scale` (see pdfRectToCss in ReviewTab).
+        const cssScale = meta.height / meta.pdfHeight;
+        const rectCenterCss = ((rect.y0 + rect.y1) / 2) * cssScale;
+        const targetTop = pageTop + rectCenterCss - container.clientHeight / 3;
+        container.scrollTo({
+          top: Math.max(0, targetTop),
+          behavior: 'smooth',
+        });
+      },
     }),
-    [],
+    [pageMetas],
   );
 
   return (

@@ -46,10 +46,22 @@ export function ReviewTab({ pdfBlob, rows, batches, onSaveRow, onDeleteRow, onRe
     return m;
   }, [rows]);
 
+  const scrollToRow = (row: ProofErrorRow) => {
+    // Take the bounding rect over all the row's quads so a multi-line match
+    // still gets a single sensible scroll target.
+    if (row.rects.length > 0) {
+      const y0 = Math.min(...row.rects.map((r) => r.y0));
+      const y1 = Math.max(...row.rects.map((r) => r.y1));
+      viewerRef.current?.scrollToRect(row.page, { y0, y1 });
+    } else {
+      viewerRef.current?.scrollToPage(row.page);
+    }
+  };
+
   useEffect(() => {
     if (!selectedId) return;
     const row = rows.find((r) => r.id === selectedId);
-    if (row) viewerRef.current?.scrollToPage(row.page);
+    if (row) scrollToRow(row);
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStartReanchor = (id: string) => {
@@ -57,7 +69,7 @@ export function ReviewTab({ pdfBlob, rows, batches, onSaveRow, onDeleteRow, onRe
     setSelectedId(id);
     setDrawMode(false);
     const row = rows.find((r) => r.id === id);
-    if (row) viewerRef.current?.scrollToPage(row.page);
+    if (row) scrollToRow(row);
   };
 
   const handleCancelReanchor = () => {
