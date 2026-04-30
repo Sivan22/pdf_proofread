@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronLeft, ListChecks } from 'lucide-react';
 import * as mupdf from 'mupdf';
 import { FileDrop } from './components/FileDrop';
+import { MugahPromo } from './components/MugahPromo';
 import { Parameters } from './components/Parameters';
 import { ProgressLog } from './components/ProgressLog';
 import { PromptEditor } from './components/PromptEditor';
@@ -175,7 +176,8 @@ export default function App() {
     <div dir="rtl" className="mx-auto max-w-7xl px-6 py-6">
       <header className="mb-4 flex items-center gap-3">
         <img src="logo.png" alt="" className="size-10" />
-        <h1 className="text-2xl font-semibold tracking-tight">PDF Proofread</h1>
+        <h1 className="me-auto text-2xl font-semibold tracking-tight">PDF Proofread</h1>
+        <MugahPromo />
       </header>
 
       <Tabs
