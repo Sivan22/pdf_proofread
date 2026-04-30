@@ -1,40 +1,59 @@
-import type { RunResult } from '../runner/orchestrator';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
+import type { ProofErrorRow } from '../runner/orchestrator';
 
 interface Props {
-  result: RunResult | null;
+  rows: ProofErrorRow[];
   baseName: string;
+  /** Returns the bytes for the latest annotated PDF (built fresh from the current state). */
+  getAnnotatedPdf: () => Blob | null;
 }
 
-export function Results({ result, baseName }: Props) {
-  if (!result) return null;
-  const anchored = result.errors.filter((e) => e.match !== 'unmatched').length;
-  const unmatched = result.errors.length - anchored;
+export function Results({ rows, baseName, getAnnotatedPdf }: Props) {
+  if (rows.length === 0) return null;
+  const anchored = rows.filter((r) => r.match !== 'unmatched').length;
+  const unmatched = rows.length - anchored;
 
-  const pdfUrl = URL.createObjectURL(result.annotatedPdf);
-  const jsonBlob = new Blob([JSON.stringify(result.errors, null, 2)], { type: 'application/json' });
-  const jsonUrl = URL.createObjectURL(jsonBlob);
+  const onDownloadPdf = () => {
+    const blob = getAnnotatedPdf();
+    if (!blob) return;
+    triggerDownload(blob, `${baseName}_reviewed.pdf`);
+  };
+
+  const onDownloadJson = () => {
+    const errors = rows.map((r) => ({
+      page: r.page,
+      text: r.text,
+      error: r.error,
+      fix: r.fix,
+      match: r.match,
+    }));
+    const blob = new Blob([JSON.stringify(errors, null, 2)], { type: 'application/json' });
+    triggerDownload(blob, `${baseName}_errors.json`);
+  };
 
   return (
     <Card>
       <CardContent className="pt-6">
         <div className="text-sm">
-          סה"כ {result.errors.length} טעויות — {anchored} עוגנו, {unmatched} ללא עיגון
+          סה"כ {rows.length} טעויות — {anchored} עוגנו, {unmatched} ללא עיגון
         </div>
         <div className="mt-3 flex gap-2">
-          <Button asChild>
-            <a href={pdfUrl} download={`${baseName}_reviewed.pdf`}>
-              הורד PDF
-            </a>
-          </Button>
-          <Button asChild>
-            <a href={jsonUrl} download={`${baseName}_errors.json`}>
-              הורד JSON
-            </a>
-          </Button>
+          <Button onClick={onDownloadPdf}>הורד PDF</Button>
+          <Button onClick={onDownloadJson}>הורד JSON</Button>
         </div>
       </CardContent>
     </Card>
   );
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

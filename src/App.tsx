@@ -1,16 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronLeft, ListChecks } from 'lucide-react';
+import * as mupdf from 'mupdf';
 import { FileDrop } from './components/FileDrop';
 import { Parameters } from './components/Parameters';
 import { ProgressLog } from './components/ProgressLog';
 import { PromptEditor } from './components/PromptEditor';
 import { Results } from './components/Results';
+import { ReviewTab } from './components/ReviewTab';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Alert, AlertDescription } from './components/ui/alert';
 import { Button } from './components/ui/button';
+import { Card } from './components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { isRouteModelValid } from './ai/providers';
-import { openPdf } from './pdf/mupdf';
-import { runProofread } from './runner/orchestrator';
-import type { BatchProgress, RunResult } from './runner/orchestrator';
+import {
+  HIGHLIGHT_EXACT,
+  addHighlight,
+  buildAnnotationComment,
+  openPdf,
+  rectsToQuads,
+  removeAnnotation,
+  saveAnnotated,
+  updateAnnotationContents,
+} from './pdf/mupdf';
+import type { Rect } from './pdf/mupdf';
+import { startProofread } from './runner/orchestrator';
+import type { BatchProgress, ProofErrorRow } from './runner/orchestrator';
 import { DEFAULT_PROMPT } from './runner/prompt';
 import { loadSettings, saveSettings, type Settings } from './store/settings';
 
@@ -20,23 +35,28 @@ export default function App() {
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [batches, setBatches] = useState<Map<number, BatchProgress>>(new Map());
-  const [result, setResult] = useState<RunResult | null>(null);
+  const [rows, setRows] = useState<ProofErrorRow[]>([]);
+  const [activeTab, setActiveTab] = useState<'setup' | 'review'>('setup');
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const docRef = useRef<mupdf.PDFDocument | null>(null);
 
   useEffect(() => saveSettings(settings), [settings]);
 
-  // Populate prompt with DEFAULT_PROMPT on first load if empty.
   useEffect(() => {
     if (!settings.prompt) {
       setSettings((s) => ({ ...s, prompt: DEFAULT_PROMPT }));
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Read page count when a new file is picked.
+  // Picking a (new) file clears any prior run state. The Review tab uses the
+  // file directly (File extends Blob) so the user can browse the PDF before
+  // running any analysis.
   useEffect(() => {
     setPageCount(null);
-    setResult(null);
+    setRows([]);
+    setBatches(new Map());
+    docRef.current = null;
     if (!file) return;
     let cancelled = false;
     file.arrayBuffer().then((buf) => {
@@ -65,13 +85,15 @@ export default function App() {
   const onRun = async () => {
     if (!file) return;
     setError(null);
-    setResult(null);
+    setRows([]);
     setBatches(new Map());
+    setActiveTab('review');
     setRunning(true);
+    docRef.current = null;
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      const r = await runProofread({
+      const handle = await startProofread({
         file,
         settings,
         abortSignal: ac.signal,
@@ -81,8 +103,11 @@ export default function App() {
             next.set(p.index, p);
             return next;
           }),
+        onErrors: (newRows) =>
+          setRows((prev) => [...prev, ...newRows]),
       });
-      setResult(r);
+      docRef.current = handle.doc;
+      await handle.done;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -93,35 +118,140 @@ export default function App() {
 
   const onCancel = () => abortRef.current?.abort();
 
+  const onSaveRow = (id: string, patch: { text: string; error: string; fix: string }) => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== id) return r;
+        const updated = { ...r, ...patch };
+        if (r.annot) {
+          const comment = buildAnnotationComment(
+            patch.error,
+            patch.fix,
+            r.match === 'exact' ? undefined : patch.text,
+          );
+          updateAnnotationContents(r.annot, comment);
+        }
+        return updated;
+      }),
+    );
+  };
+
+  const onDeleteRow = (id: string) => {
+    setRows((prev) => {
+      const target = prev.find((r) => r.id === id);
+      if (target?.annot && docRef.current) {
+        removeAnnotation(docRef.current, target.page, target.annot);
+      }
+      return prev.filter((r) => r.id !== id);
+    });
+  };
+
+  const onReanchorRow = (id: string, rects: Rect[]) => {
+    if (!docRef.current) return;
+    const doc = docRef.current;
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== id) return r;
+        if (r.annot) removeAnnotation(doc, r.page, r.annot);
+        const comment = buildAnnotationComment(r.error, r.fix);
+        const annot = addHighlight(doc, {
+          page: r.page,
+          quads: rectsToQuads(rects),
+          contents: comment,
+          color: HIGHLIGHT_EXACT,
+        });
+        return { ...r, rects, match: 'exact', annot };
+      }),
+    );
+  };
+
+  const getAnnotatedPdf = (): Blob | null => {
+    if (!docRef.current) return null;
+    const bytes = saveAnnotated(docRef.current);
+    return new Blob([bytes as BlobPart], { type: 'application/pdf' });
+  };
+
   return (
-    <div dir="rtl" className="mx-auto max-w-3xl px-6 py-8">
-      <header className="mb-6 flex items-center gap-3">
+    <div dir="rtl" className="mx-auto max-w-7xl px-6 py-6">
+      <header className="mb-4 flex items-center gap-3">
         <img src="logo.png" alt="" className="size-10" />
         <h1 className="text-2xl font-semibold tracking-tight">PDF Proofread</h1>
       </header>
 
-      <div className="space-y-4">
-        <SettingsPanel settings={settings} onChange={setSettings} />
-        <FileDrop file={file} pageCount={pageCount} onFile={setFile} />
-        <Parameters settings={settings} pageCount={pageCount} onChange={setSettings} />
-        <PromptEditor prompt={settings.prompt} onChange={(p) => setSettings({ ...settings, prompt: p })} />
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'setup' | 'review')}>
+        <TabsList>
+          <TabsTrigger value="setup">הגדרות</TabsTrigger>
+          <TabsTrigger value="review" disabled={!file}>
+            סקירה {rows.length > 0 && `(${rows.length})`}
+          </TabsTrigger>
+        </TabsList>
 
-        <div className="flex gap-2">
-          <Button onClick={onRun} disabled={!canRun}>הרץ</Button>
-          {running && (
-            <Button variant="outline" onClick={onCancel}>ביטול</Button>
-          )}
-        </div>
+        <TabsContent value="setup">
+          <div className="mx-auto max-w-3xl space-y-4">
+            <SettingsPanel settings={settings} onChange={setSettings} />
+            <FileDrop file={file} pageCount={pageCount} onFile={setFile} />
+            <Parameters settings={settings} pageCount={pageCount} onChange={setSettings} />
+            <PromptEditor
+              prompt={settings.prompt}
+              onChange={(p) => setSettings({ ...settings, prompt: p })}
+            />
 
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>שגיאה: {error}</AlertDescription>
-          </Alert>
-        )}
+            <div className="flex gap-2">
+              <Button onClick={onRun} disabled={!canRun}>הרץ</Button>
+              {running && (
+                <Button variant="outline" onClick={onCancel}>ביטול</Button>
+              )}
+            </div>
 
-        <ProgressLog batches={batches} />
-        <Results result={result} baseName={baseName} />
-      </div>
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>שגיאה: {error}</AlertDescription>
+              </Alert>
+            )}
+
+            <CollapsibleLogs batches={batches} />
+            <Results rows={rows} baseName={baseName} getAnnotatedPdf={getAnnotatedPdf} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="review">
+          <ReviewTab
+            pdfBlob={file}
+            rows={rows}
+            batches={batches}
+            onSaveRow={onSaveRow}
+            onDeleteRow={onDeleteRow}
+            onReanchorRow={onReanchorRow}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
+  );
+}
+
+function CollapsibleLogs({ batches }: { batches: Map<number, BatchProgress> }) {
+  const [open, setOpen] = useState(false);
+  if (batches.size === 0) return null;
+  const list = [...batches.values()];
+  const done = list.filter((b) => b.status === 'done' || b.status === 'error').length;
+  return (
+    <Card>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center justify-between gap-2 rounded-xl px-6 py-3 text-start text-sm font-medium hover:bg-accent/40"
+      >
+        <span className="flex items-center gap-2">
+          <ListChecks className="size-4" />
+          יומן הרצה ({done} / {list.length})
+        </span>
+        {open ? <ChevronDown className="size-4" /> : <ChevronLeft className="size-4" />}
+      </button>
+      {open && (
+        <div className="px-2 pb-3">
+          <ProgressLog batches={batches} />
+        </div>
+      )}
+    </Card>
   );
 }

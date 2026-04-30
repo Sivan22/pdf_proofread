@@ -185,6 +185,52 @@ function fontGlyph(fontName: string, ch: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Some Hebrew PDFs (especially typesetters that place each glyph at an absolute
+ * coordinate) emit chars in a stream order that does not match logical reading
+ * order — letters within a word can appear shuffled, which destroys substring
+ * matching and confuses the LLM. Sorting a Hebrew-dominant visual line by
+ * X-position (right→left) recovers logical order in those cases.
+ *
+ * We only sort when stream order is *clearly* out of step with on-page X
+ * positions — a majority of adjacent char-pairs must be out of RTL order.
+ * Otherwise we trust the stream, since well-typeset PDFs already deliver chars
+ * in logical order and re-sorting on small kerning differences can corrupt
+ * adjacent letters.
+ *
+ * Runs after CP1255 demojibake so the chars we sort are real Hebrew Unicode.
+ */
+function sortCharsByVisualOrder(chars: RawChar[]): void {
+  if (chars.length < 2) return;
+  let hebCount = 0;
+  let latCount = 0;
+  for (const c of chars) {
+    const cp = c.ch.codePointAt(0) ?? 0;
+    if (cp >= 0x0590 && cp <= 0x05FF) hebCount++;
+    else if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A)) latCount++;
+  }
+  if (hebCount === 0 || latCount >= hebCount) return;
+
+  const xCenter = (q: mupdf.Quad): number => {
+    const a = q as unknown as number[];
+    return (a[0] + a[2] + a[4] + a[6]) / 4;
+  };
+
+  // Adjacent-pair inversion count vs RTL expectation: in RTL the prior char's
+  // X-center should exceed the next char's. Tolerance of 1pt absorbs subpixel
+  // jitter and harmless kerning overlaps. Sorting kicks in only when at least
+  // a fifth of pairs are clearly inverted — that's the "shuffled glyph stream"
+  // signature; ordinary Hebrew text scores near zero.
+  let inverted = 0;
+  for (let i = 1; i < chars.length; i++) {
+    const dx = xCenter(chars[i - 1].quad) - xCenter(chars[i].quad);
+    if (dx < -1) inverted++;
+  }
+  if (inverted * 5 < chars.length - 1) return;
+
+  chars.sort((a, b) => xCenter(b.quad) - xCenter(a.quad));
+}
+
 function fixMojibakeRuns(chars: RawChar[]): RawChar[] {
   const result: RawChar[] = [];
   let i = 0;
@@ -309,28 +355,41 @@ export function extractPageContent(
 function assembleBlock(index: number, raw: RawBlock): TextBlock | null {
   if (raw.lines.length === 0) return null;
 
-  let text = '';
-  const quads: (mupdf.Quad | null)[] = [];
+  // Group lines by visual baseline. Two mupdf-lines belong to the same visual
+  // line when their Y baselines are close enough — typesetters that emit each
+  // glyph or word as a separate run land here, and so do titles set glyph-by-
+  // glyph. Once grouped, we sort chars in the group by X (right→left for
+  // Hebrew-dominant groups), which recovers logical reading order even when
+  // mupdf's stream order shuffles letters within a word.
+  const groups: { chars: RawChar[]; h: number }[] = [];
   let prevY: number | null = null;
-  let prevH: number = 0;
-
+  let prevH = 0;
   for (const line of raw.lines) {
     if (line.chars.length === 0) continue;
     const [, y0, , y1] = line.bbox;
     const h = y1 - y0;
-    // Same visual line if the Y baseline is closer than half the previous
-    // line's height — this rejoins runs that mupdf split for fragmented
-    // typesetting (e.g. a title set glyph-by-glyph).
-    if (prevY != null && Math.abs(y0 - prevY) > Math.max(2, prevH * 0.5)) {
-      text += '\n';
-      quads.push(null);
-    }
-    for (const c of line.chars) {
-      text += c.ch;
-      quads.push(c.quad);
+    if (prevY != null && Math.abs(y0 - prevY) <= Math.max(2, prevH * 0.5)) {
+      groups[groups.length - 1].chars.push(...line.chars);
+      groups[groups.length - 1].h = Math.max(groups[groups.length - 1].h, h);
+    } else {
+      groups.push({ chars: [...line.chars], h });
     }
     prevY = y0;
     prevH = h;
+  }
+
+  let text = '';
+  const quads: (mupdf.Quad | null)[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    sortCharsByVisualOrder(groups[i].chars);
+    if (i > 0) {
+      text += '\n';
+      quads.push(null);
+    }
+    for (const c of groups[i].chars) {
+      text += c.ch;
+      quads.push(c.quad);
+    }
   }
 
   if (!text.trim()) return null;
