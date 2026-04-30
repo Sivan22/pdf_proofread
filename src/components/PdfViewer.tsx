@@ -90,7 +90,9 @@ export const PdfViewer = forwardRef<PdfViewerHandle, PdfViewerProps>(function Pd
       const cnt = d.countPages();
       for (let i = 0; i < cnt; i++) {
         const page = d.loadPage(i);
-        const [, , pdfW, pdfH] = page.getBounds();
+        // Match textmap's pixmap render box (MediaBox) so the image's coord
+        // space lines up with the char quads we use for highlights.
+        const [, , pdfW, pdfH] = page.getBounds('MediaBox');
         dims.push({ pageNum: i + 1, pdfWidth: pdfW, pdfHeight: pdfH });
       }
       if (!cancelled) {

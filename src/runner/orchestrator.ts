@@ -176,7 +176,7 @@ export async function startProofread(opts: RunOptions): Promise<RunHandle> {
                 });
               } else {
                 const page = doc.loadPage(e.page - 1);
-                const [, , w, h] = page.getBounds();
+                const [, , w, h] = page.getBounds('MediaBox');
                 rows.push({
                   id,
                   page: e.page,

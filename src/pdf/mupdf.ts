@@ -84,7 +84,7 @@ export function findAnchor(
   const pageIdx = err.page - 1;
   if (pageIdx < 0 || pageIdx >= doc.countPages()) return null;
   const page = doc.loadPage(pageIdx);
-  const [, , w, h] = page.getBounds();
+  const [, , w, h] = page.getBounds('MediaBox');
 
   if (pageContent) {
     const tm = findText(pageContent.blocks, err.text);
