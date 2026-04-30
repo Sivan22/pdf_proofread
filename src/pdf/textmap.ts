@@ -185,20 +185,36 @@ function fontGlyph(fontName: string, ch: string): string | undefined {
   return undefined;
 }
 
+/** Quad axis projections we use repeatedly when re-sorting / re-spacing. */
+function quadXMin(q: mupdf.Quad): number {
+  const a = q as unknown as number[];
+  return Math.min(a[0], a[2], a[4], a[6]);
+}
+function quadXMax(q: mupdf.Quad): number {
+  const a = q as unknown as number[];
+  return Math.max(a[0], a[2], a[4], a[6]);
+}
+function quadYMin(q: mupdf.Quad): number {
+  const a = q as unknown as number[];
+  return Math.min(a[1], a[3], a[5], a[7]);
+}
+function quadYMax(q: mupdf.Quad): number {
+  const a = q as unknown as number[];
+  return Math.max(a[1], a[3], a[5], a[7]);
+}
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 /**
- * Some Hebrew PDFs (especially typesetters that place each glyph at an absolute
- * coordinate) emit chars in a stream order that does not match logical reading
- * order — letters within a word can appear shuffled, which destroys substring
- * matching and confuses the LLM. Sorting a Hebrew-dominant visual line by
- * X-position (right→left) recovers logical order in those cases.
- *
- * We only sort when stream order is *clearly* out of step with on-page X
- * positions — a majority of adjacent char-pairs must be out of RTL order.
- * Otherwise we trust the stream, since well-typeset PDFs already deliver chars
- * in logical order and re-sorting on small kerning differences can corrupt
- * adjacent letters.
- *
- * Runs after CP1255 demojibake so the chars we sort are real Hebrew Unicode.
+ * Sort a Hebrew-dominant visual line by X-position descending (right→left).
+ * mupdf delivers chars in PDF stream order, which for typesetters that place
+ * each glyph at an absolute coordinate does not match logical reading order;
+ * X-descending recovers it. JS sort is stable, so chars at equal X keep
+ * stream order. Lines that aren't Hebrew-dominant are left alone so legitimate
+ * LTR runs aren't reversed.
  */
 function sortCharsByVisualOrder(chars: RawChar[]): void {
   if (chars.length < 2) return;
@@ -210,25 +226,138 @@ function sortCharsByVisualOrder(chars: RawChar[]): void {
     else if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A)) latCount++;
   }
   if (hebCount === 0 || latCount >= hebCount) return;
+  chars.sort((a, b) => {
+    const ax = (quadXMin(a.quad) + quadXMax(a.quad)) / 2;
+    const bx = (quadXMin(b.quad) + quadXMax(b.quad)) / 2;
+    return bx - ax;
+  });
+}
 
-  const xCenter = (q: mupdf.Quad): number => {
-    const a = q as unknown as number[];
-    return (a[0] + a[2] + a[4] + a[6]) / 4;
+/**
+ * Combined post-sort cleanup: re-derive whitespace from quad geometry and
+ * collapse same-position duplicate punctuation. **Does not drop content** —
+ * footnote-reference letters and other superscripts stay in the output (the
+ * user wants the extracted text to mirror the page's content faithfully). We
+ * only use their height/baseline to decide *spacing*, since superscripts are
+ * visually glued to the preceding body word and shouldn't trigger a space.
+ *
+ * Heuristics:
+ *   - A char is **subordinate** (visually attached to the body run, not a
+ *     space-worthy break) when its glyph height is < 70% of the line median
+ *     letter height or its baseline sits > 25% of medH above the line's
+ *     median baseline. Footnote letters, raised dots, vowel marks all match.
+ *   - **Space** between two consecutive non-subordinate chars when the gap
+ *     (after subtracting any subordinate's X-extent that sits between them)
+ *     exceeds 35% of median body letter width. mupdf's own space heuristic
+ *     over-fires on tight kerning ("א ם" inside אם) and under-fires on
+ *     narrow inter-word gaps ("פטורלהחזיר"); geometry alone fixes both.
+ *   - **Duplicate punctuation**: two same-char punctuation glyphs at
+ *     overlapping or touching X-ranges — the typesetter rendered one mark
+ *     twice. Keep one.
+ *
+ * Synthetic spaces get a quad covering the gap so highlight quads still land
+ * correctly when a search match spans the boundary.
+ */
+function cleanLine(chars: RawChar[]): RawChar[] {
+  if (chars.length === 0) return chars;
+
+  const isLetter = (c: RawChar) => {
+    const cp = c.ch.codePointAt(0) ?? 0;
+    return (
+      (cp >= 0x0590 && cp <= 0x05FF) ||
+      (cp >= 0x41 && cp <= 0x5A) ||
+      (cp >= 0x61 && cp <= 0x7A)
+    );
+  };
+  const letters = chars.filter(isLetter);
+
+  let medH = 0;
+  let medYMax = 0;
+  if (letters.length >= 3) {
+    medH = median(letters.map((c) => quadYMax(c.quad) - quadYMin(c.quad)));
+    medYMax = median(letters.map((c) => quadYMax(c.quad)));
+  }
+  const isSubordinate = (c: RawChar): boolean => {
+    if (medH <= 0) return false;
+    const h = quadYMax(c.quad) - quadYMin(c.quad);
+    if (h < medH * 0.7) return true;
+    if (medYMax - quadYMax(c.quad) > medH * 0.25) return true;
+    return false;
   };
 
-  // Adjacent-pair inversion count vs RTL expectation: in RTL the prior char's
-  // X-center should exceed the next char's. Tolerance of 1pt absorbs subpixel
-  // jitter and harmless kerning overlaps. Sorting kicks in only when at least
-  // a fifth of pairs are clearly inverted — that's the "shuffled glyph stream"
-  // signature; ordinary Hebrew text scores near zero.
-  let inverted = 0;
-  for (let i = 1; i < chars.length; i++) {
-    const dx = xCenter(chars[i - 1].quad) - xCenter(chars[i].quad);
-    if (dx < -1) inverted++;
-  }
-  if (inverted * 5 < chars.length - 1) return;
+  const bodyWidths = letters
+    .filter((c) => !isSubordinate(c))
+    .map((c) => quadXMax(c.quad) - quadXMin(c.quad))
+    .filter((w) => w > 0.5);
+  const medW = bodyWidths.length > 0 ? median(bodyWidths) : 0;
+  const spaceThreshold = medW > 0 ? medW * 0.35 : 0;
 
-  chars.sort((a, b) => xCenter(b.quad) - xCenter(a.quad));
+  const isPunct = (ch: string) => /[.,;:?!]/.test(ch);
+
+  // First pass: drop existing whitespace, keep everything else, decide which
+  // chars are subordinate (we'll skip them when computing gaps for spacing).
+  type Item = { c: RawChar; subordinate: boolean };
+  const items: Item[] = [];
+  for (const c of chars) {
+    if (/\s/.test(c.ch)) continue;
+    items.push({ c, subordinate: isSubordinate(c) });
+  }
+  if (items.length === 0) return [];
+
+  // Second pass: emit chars; insert spaces between non-subordinate pairs whose
+  // gap (after subtracting any sandwiched subordinates) exceeds the threshold;
+  // collapse adjacent duplicate punctuation that share an X-range.
+  const out: RawChar[] = [];
+  let lastBody: RawChar | null = null;
+  let subBetweenMinX = Infinity;
+  let subBetweenMaxX = -Infinity;
+
+  for (const { c, subordinate } of items) {
+    if (subordinate) {
+      out.push(c);
+      subBetweenMinX = Math.min(subBetweenMinX, quadXMin(c.quad));
+      subBetweenMaxX = Math.max(subBetweenMaxX, quadXMax(c.quad));
+      continue;
+    }
+    if (lastBody) {
+      // Visual gap between the two body chars in RTL-sorted order. Subtract
+      // any subordinate glyph extent that sits in between (footnote refs etc.
+      // visually fill that gap, so they shouldn't induce a space).
+      let gap = quadXMin(lastBody.quad) - quadXMax(c.quad);
+      if (subBetweenMinX < Infinity) {
+        gap -= subBetweenMaxX - subBetweenMinX;
+      }
+      const dup =
+        lastBody.ch === c.ch &&
+        isPunct(c.ch) &&
+        quadXMin(lastBody.quad) - quadXMax(c.quad) <
+          (quadXMax(c.quad) - quadXMin(c.quad)) + 1;
+      if (dup) {
+        // Drop this duplicate; lastBody stays.
+        subBetweenMinX = Infinity;
+        subBetweenMaxX = -Infinity;
+        continue;
+      }
+      if (spaceThreshold > 0 && gap > spaceThreshold) {
+        const y0 = quadYMin(lastBody.quad);
+        const y1 = quadYMax(lastBody.quad);
+        const xLeft = quadXMax(c.quad);
+        const xRight = quadXMin(lastBody.quad);
+        const spaceQuad = [
+          xLeft, y0,
+          xRight, y0,
+          xLeft, y1,
+          xRight, y1,
+        ] as unknown as mupdf.Quad;
+        out.push({ ch: ' ', quad: spaceQuad, font: lastBody.font });
+      }
+      subBetweenMinX = Infinity;
+      subBetweenMaxX = -Infinity;
+    }
+    out.push(c);
+    lastBody = c;
+  }
+  return out;
 }
 
 function fixMojibakeRuns(chars: RawChar[]): RawChar[] {
@@ -382,11 +511,13 @@ function assembleBlock(index: number, raw: RawBlock): TextBlock | null {
   const quads: (mupdf.Quad | null)[] = [];
   for (let i = 0; i < groups.length; i++) {
     sortCharsByVisualOrder(groups[i].chars);
-    if (i > 0) {
+    const chars = cleanLine(groups[i].chars);
+    if (chars.length === 0) continue;
+    if (i > 0 && text.length > 0) {
       text += '\n';
       quads.push(null);
     }
-    for (const c of groups[i].chars) {
+    for (const c of chars) {
       text += c.ch;
       quads.push(c.quad);
     }
