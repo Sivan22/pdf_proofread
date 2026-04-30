@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PageViewport } from 'pdfjs-dist/types/src/display/display_utils';
 import { PdfViewer, type PdfPageMeta, type PdfViewerHandle } from './PdfViewer';
 import { FixCard } from './FixCard';
 import type { BatchProgress, ProofErrorRow } from '../runner/orchestrator';
@@ -42,11 +41,9 @@ export function ReviewTab({
   const drawState = useRef<DrawState | null>(null);
   const [, forceTick] = useState(0);
 
-  // Per-page viewport cache so DOM selection rects can be converted to PDF
-  // points correctly. Updated each time `renderOverlay` runs for a page.
-  const pageViewports = useRef<Map<number, { viewport: PageViewport; pdfHeight: number }>>(
-    new Map(),
-  );
+  // Per-page CSS-pixels-per-PDF-point scale cache so DOM selection rects can
+  // be converted to PDF points. Updated each time `renderOverlay` runs.
+  const pageScales = useRef<Map<number, number>>(new Map());
 
   const rowsByPage = useMemo(() => {
     const m = new Map<number, ProofErrorRow[]>();
@@ -100,21 +97,23 @@ export function ReviewTab({
       const endEl = closestPageEl(range.endContainer);
       if (!startEl || !endEl || startEl !== endEl) return;
       const pageNum = Number(startEl.getAttribute('data-page-num'));
-      const vpEntry = pageViewports.current.get(pageNum);
-      if (!vpEntry) return;
+      const cssScale = pageScales.current.get(pageNum);
+      if (!cssScale) return;
       const pageRect = startEl.getBoundingClientRect();
       const clientRects = Array.from(range.getClientRects());
       if (clientRects.length === 0) return;
       const rects: Rect[] = clientRects
-        .map((cr) => {
-          const cssRect = {
-            left: cr.left - pageRect.left,
-            top: cr.top - pageRect.top,
-            width: cr.width,
-            height: cr.height,
-          };
-          return cssRectToPdfRect(cssRect, vpEntry.viewport, vpEntry.pdfHeight);
-        })
+        .map((cr) =>
+          cssRectToPdfRect(
+            {
+              left: cr.left - pageRect.left,
+              top: cr.top - pageRect.top,
+              width: cr.width,
+              height: cr.height,
+            },
+            cssScale,
+          ),
+        )
         .filter((r): r is Rect => r !== null);
       if (rects.length === 0) return;
       const row = rows.find((r) => r.id === reanchorId);
@@ -128,13 +127,14 @@ export function ReviewTab({
   }, [reanchorId, drawMode, rows, onReanchorRow]);
 
   const renderOverlay = useCallback(
-    (meta: PdfPageMeta, viewport: PageViewport) => {
-      pageViewports.current.set(meta.pageNum, { viewport, pdfHeight: meta.pdfHeight });
+    (meta: PdfPageMeta) => {
+      const cssScale = meta.height / meta.pdfHeight;
+      pageScales.current.set(meta.pageNum, cssScale);
       const pageRows = rowsByPage.get(meta.pageNum) ?? [];
 
       const highlightEls = pageRows.flatMap((row) =>
         row.rects.map((r, i) => {
-          const css = pdfRectToCss(r, viewport, meta.pdfHeight);
+          const css = pdfRectToCss(r, cssScale);
           if (!css) return null;
           const isSelected = row.id === selectedId;
           const isReanchor = row.id === reanchorId;
@@ -221,7 +221,7 @@ export function ReviewTab({
                 forceTick((t) => t + 1);
                 if (cssRect.width < 4 || cssRect.height < 4) return;
                 if (!reanchorId) return;
-                const pdfRect = cssRectToPdfRect(cssRect, viewport, meta.pdfHeight);
+                const pdfRect = cssRectToPdfRect(cssRect, cssScale);
                 if (!pdfRect) return;
                 onReanchorRow(reanchorId, [pdfRect]);
                 setReanchorId(null);
@@ -374,34 +374,32 @@ function closestPageEl(node: Node): HTMLElement | null {
   return el;
 }
 
+/**
+ * Convert a Rect (PDF points, mupdf top-left origin) to CSS pixels using the
+ * viewer's `cssScale` (CSS-pixels per PDF-point). mupdf and CSS share the
+ * top-left origin, so it's a straight scale — no Y flip needed.
+ */
 function pdfRectToCss(
   r: Rect,
-  viewport: PageViewport,
-  pdfHeight: number,
+  cssScale: number,
 ): { left: number; top: number; width: number; height: number } | null {
-  const [vx0, vy0] = viewport.convertToViewportPoint(r.x0, pdfHeight - r.y0);
-  const [vx1, vy1] = viewport.convertToViewportPoint(r.x1, pdfHeight - r.y1);
-  const left = Math.min(vx0, vx1);
-  const top = Math.min(vy0, vy1);
-  const width = Math.abs(vx1 - vx0);
-  const height = Math.abs(vy1 - vy0);
+  const left = r.x0 * cssScale;
+  const top = r.y0 * cssScale;
+  const width = (r.x1 - r.x0) * cssScale;
+  const height = (r.y1 - r.y0) * cssScale;
   if (width < 1 || height < 1) return null;
   return { left, top, width, height };
 }
 
 function cssRectToPdfRect(
   css: { left: number; top: number; width: number; height: number },
-  viewport: PageViewport,
-  pdfHeight: number,
+  cssScale: number,
 ): Rect | null {
-  const [px0, py0] = viewport.convertToPdfPoint(css.left, css.top);
-  const [px1, py1] = viewport.convertToPdfPoint(css.left + css.width, css.top + css.height);
-  const x0 = Math.min(px0, px1);
-  const x1 = Math.max(px0, px1);
-  const yUpMin = Math.min(py0, py1);
-  const yUpMax = Math.max(py0, py1);
-  const y0 = pdfHeight - yUpMax;
-  const y1 = pdfHeight - yUpMin;
+  if (cssScale <= 0) return null;
+  const x0 = css.left / cssScale;
+  const y0 = css.top / cssScale;
+  const x1 = (css.left + css.width) / cssScale;
+  const y1 = (css.top + css.height) / cssScale;
   if (x1 - x0 < 1 || y1 - y0 < 1) return null;
   return { x0, y0, x1, y1 };
 }
