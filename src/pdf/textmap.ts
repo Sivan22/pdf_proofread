@@ -101,9 +101,12 @@ function stripNikkudGlyphsInBlock(raw: RawBlock): void {
   for (const line of raw.lines) {
     line.chars = line.chars.filter((c) => {
       const cp = c.ch.codePointAt(0) ?? 0;
-      // Latin-1 supplement chars left after demojibake are unmapped font
-      // noise (the font's nikkud-glyph slots).
-      if (cp >= 0x00A0 && cp <= 0x00FF) return false;
+      // Latin-1 supplement and C1-control range left after demojibake are
+      // unmapped font noise (the font's nikkud / cantillation glyph slots).
+      // Z_PREVIW.MAP routes te'amim through bytes 0x80-0x9C in the pre-remap
+      // convention — those slip below the 0xA0 boundary and would survive
+      // otherwise.
+      if (cp >= 0x0080 && cp <= 0x00FF) return false;
       // Any Latin letter inside a Hebrew block is — virtually always — a
       // nikkud glyph slot (Q, U, X, c, etc.). Real English words are rare
       // in a Hebrew document and the trade-off keeps searches clean.
@@ -178,6 +181,9 @@ const Z_FONT_LETTER_MAP: Record<string, string> = {
   '`': 'צ', // sade + dagesh
   a: 'ק', // qof + dagesh
   c: 'ת', // tav + dagesh
+  // Hebrew-specific dashes (Z_PREVIW.MAP lines 71/85 — endash/emdash).
+  J: '–', // en-dash (U+2013), Z col 2 byte 0x4A
+  K: '—', // em-dash (U+2014), Z col 2 byte 0x4B
   // Pre-remap (lowercase / shin-block) encoding — Z_PREVIW.MAP column 1.
   // No conflicts with the post-remap entries above.
   E: 'ך', // final-kaf + qamats (pre-remap)
@@ -211,7 +217,8 @@ const Z_FONT_LETTER_MAP: Record<string, string> = {
 const Z_EXTRA_HEBREW_BYTES: Record<number, string> = {
   0xFD: 'ר', // resh + dagesh
   0xFE: 'ח', // chet + dagesh
-  0xDA: '־', // makaf  (Hebrew word-connector, U+05BE)
+  0xDA: '־', // makaf (Hebrew word-connector, U+05BE)
+  0xC1: '-', // hyphen (Z col 2 byte 193 per Z_PREVIW.MAP line 16)
 };
 
 const FONT_GLYPH_MAP: Record<string, Record<string, string>> = {
