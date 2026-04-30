@@ -204,12 +204,14 @@ const Z_FONT_LETTER_MAP: Record<string, string> = {
 };
 
 // Bytes outside CP1255's 0xE0-0xFA Hebrew range that still encode Hebrew
-// letters in Z_PREVIW.MAP — handled at fixMojibakeRuns level since they
-// survive the run-anchor check (Latin-1 mojibake range) but aren't covered
-// by the standard 0xE0-0xFA decode.
+// letters or Hebrew-specific punctuation in Z_PREVIW.MAP. Handled at
+// fixMojibakeRuns level since they survive the run-anchor check
+// (Latin-1 mojibake range) but aren't covered by the standard CP1255 decode
+// and would otherwise be killed by the block-level Latin-1 strip.
 const Z_EXTRA_HEBREW_BYTES: Record<number, string> = {
   0xFD: 'ר', // resh + dagesh
   0xFE: 'ח', // chet + dagesh
+  0xDA: '־', // makaf  (Hebrew word-connector, U+05BE)
 };
 
 const FONT_GLYPH_MAP: Record<string, Record<string, string>> = {
