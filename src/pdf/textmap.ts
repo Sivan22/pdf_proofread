@@ -133,23 +133,33 @@ function stripNikkudGlyphsInBlock(raw: RawBlock): void {
  * Glyph-slot map for the Z_FR / Z_Vilna / Z_Margalit Hebrew typesetting
  * fonts (Bnei-Baruch / "Hasulam" lineage). Derived from the publisher's
  * own `Z_PREVIW.MAP` font definition: the font hosts dagesh-bearing /
- * shin-dot / vowel-aware letterforms in ASCII codepoints, so the byte
- * mupdf reports back doesn't directly mean its ASCII letter.
+ * shin-dot / vowel-aware letterforms in non-CP1255 codepoints, so the
+ * byte mupdf reports back doesn't directly mean its ASCII letter.
  *
- * Every entry below is the consonant the slot represents — dagesh and
- * shin/sin distinctions get folded back onto the bare letter, since
- * proofreading only cares about consonants. ASCII bracket/punctuation
- * slots (76, 78, 80, 100, 101, 102, 103) keep their normal meaning and
- * are left out so they pass through unchanged.
+ * Two encoding conventions appear in the wild and `Z_PREVIW.MAP`
+ * documents both — the ASCII upper-letter "post-remap" encoding
+ * (Q-Z, [, \, ], …) and the ASCII lower-letter "pre-remap" encoding
+ * (a-z). Both are listed here so PDFs using either convention extract
+ * correctly. Every entry is the bare consonant the slot represents
+ * (dagesh / shin-dot / vowel distinctions are folded onto the consonant
+ * since proofreading only cares about letters).
+ *
+ * Where the two conventions disagree on the same byte we pick the
+ * "post-remap" (uppercase) meaning, because that's what we've observed
+ * mupdf emit on every sample PDF so far:
+ *   - B → ך (kafs_shva)  (pre-remap meaning is ו vav_holam)
+ *   - a → ק (qof_dagesh) (pre-remap meaning is ב bet_dagesh)
+ *   - c → ת (tav_dagesh) (pre-remap meaning is ד dalet_dagesh)
  */
 const Z_FONT_LETTER_MAP: Record<string, string> = {
-  A: 'ו', // vav with holam
-  B: 'ך', // final-kaf with sheva
-  C: 'ך', // final-kaf with qamats
-  F: 'ש', // shin with shin-dot (Rshin)
-  G: 'ש', // Rshin + dagesh
-  H: 'ש', // shin with sin-dot (Lshin)
-  I: 'ש', // Lshin + dagesh
+  // Post-remap (uppercase) encoding — Z_PREVIW.MAP column 2
+  A: 'ו', // vav + holam
+  B: 'ך', // final-kaf + sheva
+  C: 'ך', // final-kaf + qamats
+  F: 'ש', // shin (shin-dot)
+  G: 'ש', // shin (shin-dot) + dagesh
+  H: 'ש', // shin (sin-dot)
+  I: 'ש', // shin (sin-dot) + dagesh
   Q: 'ב', // bet + dagesh
   R: 'ג', // gimel + dagesh
   S: 'ד', // dalet + dagesh
@@ -168,6 +178,38 @@ const Z_FONT_LETTER_MAP: Record<string, string> = {
   '`': 'צ', // sade + dagesh
   a: 'ק', // qof + dagesh
   c: 'ת', // tav + dagesh
+  // Pre-remap (lowercase / shin-block) encoding — Z_PREVIW.MAP column 1.
+  // No conflicts with the post-remap entries above.
+  E: 'ך', // final-kaf + qamats (pre-remap)
+  L: 'ש', // shin (shin-dot)  (pre-remap)
+  M: 'ש', // shin (shin-dot) + dagesh
+  N: 'ש', // shin (sin-dot)
+  O: 'ש', // shin (sin-dot) + dagesh
+  b: 'ג', // gimel + dagesh
+  d: 'ה', // he + dagesh
+  e: 'ו', // vav + dagesh
+  f: 'ז', // zayin + dagesh
+  h: 'ט', // tet + dagesh
+  i: 'י', // yod + dagesh
+  j: 'ך', // final-kaf + dagesh
+  k: 'כ', // kaf + dagesh
+  l: 'ל', // lamed + dagesh
+  n: 'מ', // mem + dagesh
+  p: 'נ', // nun + dagesh
+  q: 'ס', // samekh + dagesh
+  t: 'פ', // pe + dagesh
+  v: 'צ', // sade + dagesh
+  w: 'ק', // qof + dagesh
+  z: 'ת', // tav + dagesh
+};
+
+// Bytes outside CP1255's 0xE0-0xFA Hebrew range that still encode Hebrew
+// letters in Z_PREVIW.MAP — handled at fixMojibakeRuns level since they
+// survive the run-anchor check (Latin-1 mojibake range) but aren't covered
+// by the standard 0xE0-0xFA decode.
+const Z_EXTRA_HEBREW_BYTES: Record<number, string> = {
+  0xFD: 'ר', // resh + dagesh
+  0xFE: 'ח', // chet + dagesh
 };
 
 const FONT_GLYPH_MAP: Record<string, Record<string, string>> = {
@@ -408,8 +450,12 @@ function fixMojibakeRuns(chars: RawChar[]): RawChar[] {
   let i = 0;
   while (i < chars.length) {
     const cp = chars[i].ch.codePointAt(0) ?? 0;
-    // Anchor a run on a Latin-1 char that's in the CP1255 Hebrew block.
-    if (!isCp1255Hebrew(cp)) {
+    // Anchor a run on a Latin-1 char that's in the CP1255 Hebrew block —
+    // or on a Z-font glyph slot (so a line like "תa" with Z-font gets the
+    // 'a' mapped to ק even without an explicit CP1255 byte first).
+    const fg = fontGlyph(chars[i].font, chars[i].ch);
+    const isAnchor = isCp1255Hebrew(cp) || Z_EXTRA_HEBREW_BYTES[cp] !== undefined || fg !== undefined;
+    if (!isAnchor) {
       result.push(chars[i]);
       i++;
       continue;
@@ -440,6 +486,15 @@ function fixMojibakeRuns(chars: RawChar[]): RawChar[] {
       const cp2 = c.ch.codePointAt(0) ?? 0;
       if (isCp1255Hebrew(cp2)) {
         run.push({ ...c, ch: String.fromCodePoint(cp2 - 0xE0 + 0x05D0) });
+        continue;
+      }
+      // Latin-1 bytes outside the CP1255 Hebrew block can still encode
+      // Hebrew letters in the Z fonts (e.g. 0xFD = resh+dagesh, 0xFE =
+      // chet+dagesh per Z_PREVIW.MAP). Consult the extra-bytes table
+      // before falling through to the font-glyph slots.
+      const extra = Z_EXTRA_HEBREW_BYTES[cp2];
+      if (extra !== undefined) {
+        run.push({ ...c, ch: extra });
         continue;
       }
       // ASCII letters / underscore / extended-Latin: consult the font
