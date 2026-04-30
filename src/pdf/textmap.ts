@@ -307,12 +307,13 @@ function sortCharsByVisualOrder(chars: RawChar[]): void {
 }
 
 /**
- * Combined post-sort cleanup: re-derive whitespace from quad geometry and
- * collapse same-position duplicate punctuation. **Does not drop content** —
- * footnote-reference letters and other superscripts stay in the output (the
- * user wants the extracted text to mirror the page's content faithfully). We
- * only use their height/baseline to decide *spacing*, since superscripts are
- * visually glued to the preceding body word and shouldn't trigger a space.
+ * Combined post-sort cleanup: re-derive whitespace from quad geometry.
+ * **Does not drop content** — footnote-reference letters, doubled
+ * punctuation, and other oddities stay in the output verbatim because
+ * they're often the very things we're trying to flag during proofreading.
+ * We only use char height/baseline to decide *spacing*, since superscripts
+ * are visually glued to the preceding body word and shouldn't trigger a
+ * space between word and ref.
  *
  * Heuristics:
  *   - A char is **subordinate** (visually attached to the body run, not a
@@ -324,9 +325,6 @@ function sortCharsByVisualOrder(chars: RawChar[]): void {
  *     exceeds 35% of median body letter width. mupdf's own space heuristic
  *     over-fires on tight kerning ("א ם" inside אם) and under-fires on
  *     narrow inter-word gaps ("פטורלהחזיר"); geometry alone fixes both.
- *   - **Duplicate punctuation**: two same-char punctuation glyphs at
- *     overlapping or touching X-ranges — the typesetter rendered one mark
- *     twice. Keep one.
  *
  * Synthetic spaces get a quad covering the gap so highlight quads still land
  * correctly when a search match spans the boundary.
@@ -377,8 +375,6 @@ function cleanLine(chars: RawChar[]): RawChar[] {
   const medW = bodyWidths.length > 0 ? median(bodyWidths) : 0;
   const spaceThreshold = medW > 0 ? medW * 0.35 : 0;
 
-  const isPunct = (ch: string) => /[.,;:?!]/.test(ch);
-
   // First pass: drop existing whitespace, keep everything else, decide which
   // chars are subordinate (we'll skip them when computing gaps for spacing).
   type Item = { c: RawChar; subordinate: boolean };
@@ -390,8 +386,7 @@ function cleanLine(chars: RawChar[]): RawChar[] {
   if (items.length === 0) return [];
 
   // Second pass: emit chars; insert spaces between non-subordinate pairs whose
-  // gap (after subtracting any sandwiched subordinates) exceeds the threshold;
-  // collapse adjacent duplicate punctuation that share an X-range.
+  // gap (after subtracting any sandwiched subordinates) exceeds the threshold.
   const out: RawChar[] = [];
   let lastBody: RawChar | null = null;
   let subBetweenMinX = Infinity;
@@ -411,20 +406,6 @@ function cleanLine(chars: RawChar[]): RawChar[] {
       let gap = quadXMin(lastBody.quad) - quadXMax(c.quad);
       if (subBetweenMinX < Infinity) {
         gap -= subBetweenMaxX - subBetweenMinX;
-      }
-      // A "duplicate" here is the typesetter rendering the same mark twice
-      // on top of itself — i.e. the two glyph rectangles **overlap** in X.
-      // Legitimate sequences like an ellipsis (...) leave a positive gap
-      // between dots; we must NOT collapse those, so require strict overlap.
-      const dup =
-        lastBody.ch === c.ch &&
-        isPunct(c.ch) &&
-        quadXMin(lastBody.quad) < quadXMax(c.quad);
-      if (dup) {
-        // Drop this duplicate; lastBody stays.
-        subBetweenMinX = Infinity;
-        subBetweenMaxX = -Infinity;
-        continue;
       }
       if (spaceThreshold > 0 && gap > spaceThreshold) {
         const y0 = quadYMin(lastBody.quad);
