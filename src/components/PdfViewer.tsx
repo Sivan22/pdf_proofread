@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import * as mupdf from 'mupdf';
 import { extractPageContent, type PageContent, type TextBlock } from '../pdf/textmap';
 
@@ -8,12 +8,16 @@ export interface PdfViewerHandle {
    * Scroll so a specific rect on `pageNum` is visible. `rect` is in PDF points
    * using mupdf top-left origin (matches `Rect` in mupdf.ts). The rect's
    * vertical center is positioned ~⅓ from the top of the viewport so the user
-   * has context above the highlight.
+   * has context above the highlight; horizontal centering only kicks in when
+   * the page is wider than the viewport (otherwise the page sits centered and
+   * scrollLeft stays at 0).
    */
   scrollToRect: (
     pageNum: number,
-    rect: { y0: number; y1: number },
+    rect: { x0?: number; y0: number; x1?: number; y1: number },
   ) => void;
+  /** Container width in CSS pixels — useful for "fit width" zoom. */
+  getContainerWidth: () => number;
 }
 
 export interface PdfPageMeta {
@@ -33,6 +37,16 @@ export interface PdfViewerProps {
   renderOverlay?: (meta: PdfPageMeta) => React.ReactNode;
   /** Click in empty page area (bubbles up from any page). */
   onPageClick?: (pageNum: number) => void;
+  /** Fires when the page count is known (after the document loads). */
+  onPagesLoaded?: (pageCount: number) => void;
+  /** Fires as the user scrolls — reports the page whose top is closest to the viewport top. */
+  onCurrentPageChange?: (pageNum: number) => void;
+}
+
+interface IntrinsicPageDims {
+  pageNum: number;
+  pdfWidth: number;
+  pdfHeight: number;
 }
 
 /**
@@ -48,18 +62,18 @@ export interface PdfViewerProps {
  * sees, so selection-based re-anchoring picks up the same characters.
  */
 export const PdfViewer = forwardRef<PdfViewerHandle, PdfViewerProps>(function PdfViewer(
-  { blob, scale = 1.4, renderOverlay, onPageClick },
+  { blob, scale = 1.4, renderOverlay, onPageClick, onPagesLoaded, onCurrentPageChange },
   ref,
 ) {
   const [doc, setDoc] = useState<mupdf.PDFDocument | null>(null);
-  const [pageMetas, setPageMetas] = useState<PdfPageMeta[]>([]);
+  const [intrinsicDims, setIntrinsicDims] = useState<IntrinsicPageDims[]>([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   useEffect(() => {
     if (!blob) {
       setDoc(null);
-      setPageMetas([]);
+      setIntrinsicDims([]);
       return;
     }
     let cancelled = false;
@@ -72,28 +86,66 @@ export const PdfViewer = forwardRef<PdfViewerHandle, PdfViewerProps>(function Pd
       );
       const d = generic.asPDF();
       if (!d || cancelled) return;
-      const metas: PdfPageMeta[] = [];
+      const dims: IntrinsicPageDims[] = [];
       const cnt = d.countPages();
       for (let i = 0; i < cnt; i++) {
         const page = d.loadPage(i);
         const [, , pdfW, pdfH] = page.getBounds();
-        metas.push({
-          pageNum: i + 1,
-          width: pdfW * scale,
-          height: pdfH * scale,
-          pdfWidth: pdfW,
-          pdfHeight: pdfH,
-        });
+        dims.push({ pageNum: i + 1, pdfWidth: pdfW, pdfHeight: pdfH });
       }
       if (!cancelled) {
         setDoc(d);
-        setPageMetas(metas);
+        setIntrinsicDims(dims);
+        onPagesLoaded?.(dims.length);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [blob, scale]);
+  }, [blob, onPagesLoaded]);
+
+  const pageMetas = useMemo<PdfPageMeta[]>(
+    () =>
+      intrinsicDims.map((d) => ({
+        pageNum: d.pageNum,
+        pdfWidth: d.pdfWidth,
+        pdfHeight: d.pdfHeight,
+        width: d.pdfWidth * scale,
+        height: d.pdfHeight * scale,
+      })),
+    [intrinsicDims, scale],
+  );
+
+  // Track the page whose top is closest to (but not below) the viewport top
+  // and report changes to the parent.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !onCurrentPageChange) return;
+    let last = -1;
+    const update = () => {
+      const containerTop = container.getBoundingClientRect().top;
+      let best = -1;
+      let bestDist = Infinity;
+      for (const meta of pageMetas) {
+        const el = pageRefs.current.get(meta.pageNum);
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        const dist = rect.top - containerTop;
+        if (dist <= 1 && Math.abs(dist) < bestDist) {
+          bestDist = Math.abs(dist);
+          best = meta.pageNum;
+        }
+      }
+      if (best === -1 && pageMetas.length > 0) best = pageMetas[0].pageNum;
+      if (best !== -1 && best !== last) {
+        last = best;
+        onCurrentPageChange(best);
+      }
+    };
+    update();
+    container.addEventListener('scroll', update, { passive: true });
+    return () => container.removeEventListener('scroll', update);
+  }, [pageMetas, onCurrentPageChange]);
 
   useImperativeHandle(
     ref,
@@ -108,17 +160,26 @@ export const PdfViewer = forwardRef<PdfViewerHandle, PdfViewerProps>(function Pd
         const meta = pageMetas.find((m) => m.pageNum === pageNum);
         const container = containerRef.current;
         if (!el || !meta || !container) return;
-        const pageTop =
-          el.getBoundingClientRect().top -
-          container.getBoundingClientRect().top +
-          container.scrollTop;
+        const containerBox = container.getBoundingClientRect();
+        const pageBox = el.getBoundingClientRect();
+        const pageTop = pageBox.top - containerBox.top + container.scrollTop;
+        const pageLeft = pageBox.left - containerBox.left + container.scrollLeft;
         const cssScale = meta.height / meta.pdfHeight;
-        const rectCenterCss = ((rect.y0 + rect.y1) / 2) * cssScale;
-        const targetTop = pageTop + rectCenterCss - container.clientHeight / 3;
-        container.scrollTo({
+        const rectCenterCssY = ((rect.y0 + rect.y1) / 2) * cssScale;
+        const targetTop = pageTop + rectCenterCssY - container.clientHeight / 3;
+        const scrollOpts: ScrollToOptions = {
           top: Math.max(0, targetTop),
           behavior: 'smooth',
-        });
+        };
+        if (rect.x0 != null && rect.x1 != null) {
+          const rectCenterCssX = ((rect.x0 + rect.x1) / 2) * cssScale;
+          const targetLeft = pageLeft + rectCenterCssX - container.clientWidth / 2;
+          scrollOpts.left = Math.max(0, targetLeft);
+        }
+        container.scrollTo(scrollOpts);
+      },
+      getContainerWidth() {
+        return containerRef.current?.clientWidth ?? 0;
       },
     }),
     [pageMetas],
@@ -194,7 +255,7 @@ function PdfPage({
   }, [rootEl]);
 
   useEffect(() => {
-    if (!visible || pageContent) return;
+    if (!visible) return;
     let cancelled = false;
     let url: string | null = null;
     try {
@@ -214,7 +275,7 @@ function PdfPage({
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [visible, doc, meta.pageNum, scale, pageContent]);
+  }, [visible, doc, meta.pageNum, scale]);
 
   const cssScale = meta.height / meta.pdfHeight;
 

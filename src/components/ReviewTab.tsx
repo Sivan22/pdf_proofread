@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { PdfViewer, type PdfPageMeta, type PdfViewerHandle } from './PdfViewer';
 import { FixCard } from './FixCard';
 import type { BatchProgress, ProofErrorRow } from '../runner/orchestrator';
 import type { Rect } from '../pdf/mupdf';
+
+const MIN_SCALE = 0.4;
+const MAX_SCALE = 4;
+const DEFAULT_SCALE = 1.4;
 
 interface Props {
   pdfBlob: Blob | null;
@@ -40,6 +52,35 @@ export function ReviewTab({
   const [drawMode, setDrawMode] = useState(false);
   const drawState = useRef<DrawState | null>(null);
   const [, forceTick] = useState(0);
+  const [scale, setScale] = useState(DEFAULT_SCALE);
+  const [pageCount, setPageCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  // Latest page intrinsic width in PDF points — captured on each overlay
+  // render so "fit width" can compute the right zoom.
+  const latestPdfWidth = useRef<number>(0);
+  const [pageInput, setPageInput] = useState('1');
+
+  useEffect(() => {
+    setPageInput(String(currentPage));
+  }, [currentPage]);
+
+  const zoomIn = () =>
+    setScale((s) => Math.min(MAX_SCALE, Math.round((s + 0.2) * 100) / 100));
+  const zoomOut = () =>
+    setScale((s) => Math.max(MIN_SCALE, Math.round((s - 0.2) * 100) / 100));
+  const zoomReset = () => setScale(DEFAULT_SCALE);
+  const fitWidth = () => {
+    const w = viewerRef.current?.getContainerWidth() ?? 0;
+    const pdfW = latestPdfWidth.current;
+    if (w <= 0 || pdfW <= 0) return;
+    // Subtract a little so the scrollbar/margins don't force horizontal scroll.
+    const target = (w - 24) / pdfW;
+    setScale(Math.max(MIN_SCALE, Math.min(MAX_SCALE, target)));
+  };
+  const goToPage = (n: number) => {
+    const clamped = Math.max(1, Math.min(pageCount || 1, Math.floor(n)));
+    viewerRef.current?.scrollToPage(clamped);
+  };
 
   // Per-page CSS-pixels-per-PDF-point scale cache so DOM selection rects can
   // be converted to PDF points. Updated each time `renderOverlay` runs.
@@ -59,9 +100,11 @@ export function ReviewTab({
     // Take the bounding rect over all the row's quads so a multi-line match
     // still gets a single sensible scroll target.
     if (row.rects.length > 0) {
+      const x0 = Math.min(...row.rects.map((r) => r.x0));
+      const x1 = Math.max(...row.rects.map((r) => r.x1));
       const y0 = Math.min(...row.rects.map((r) => r.y0));
       const y1 = Math.max(...row.rects.map((r) => r.y1));
-      viewerRef.current?.scrollToRect(row.page, { y0, y1 });
+      viewerRef.current?.scrollToRect(row.page, { x0, y0, x1, y1 });
     } else {
       viewerRef.current?.scrollToPage(row.page);
     }
@@ -130,6 +173,7 @@ export function ReviewTab({
     (meta: PdfPageMeta) => {
       const cssScale = meta.height / meta.pdfHeight;
       pageScales.current.set(meta.pageNum, cssScale);
+      latestPdfWidth.current = meta.pdfWidth;
       const pageRows = rowsByPage.get(meta.pageNum) ?? [];
 
       const highlightEls = pageRows.flatMap((row) =>
@@ -333,7 +377,98 @@ export function ReviewTab({
       </div>
 
       <div className="relative h-full overflow-hidden rounded-md border">
-        <PdfViewer ref={viewerRef} blob={pdfBlob} renderOverlay={renderOverlay} />
+        <PdfViewer
+          ref={viewerRef}
+          blob={pdfBlob}
+          scale={scale}
+          renderOverlay={renderOverlay}
+          onPagesLoaded={setPageCount}
+          onCurrentPageChange={setCurrentPage}
+        />
+        <div
+          dir="ltr"
+          className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border bg-background/95 px-2 py-1 text-xs shadow-md backdrop-blur"
+        >
+          <button
+            type="button"
+            title="עמוד קודם"
+            disabled={currentPage <= 1}
+            onClick={() => goToPage(currentPage - 1)}
+            className="rounded p-1 hover:bg-muted disabled:opacity-40"
+          >
+            <ChevronLeft className="size-4" />
+          </button>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const n = Number(pageInput);
+              if (Number.isFinite(n)) goToPage(n);
+            }}
+            className="flex items-center gap-1"
+          >
+            <input
+              type="text"
+              inputMode="numeric"
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value.replace(/[^0-9]/g, ''))}
+              onBlur={() => setPageInput(String(currentPage))}
+              className="w-10 rounded border bg-background px-1 py-0.5 text-center"
+            />
+            <span className="text-muted-foreground">/ {pageCount || '—'}</span>
+          </form>
+          <button
+            type="button"
+            title="עמוד הבא"
+            disabled={pageCount > 0 && currentPage >= pageCount}
+            onClick={() => goToPage(currentPage + 1)}
+            className="rounded p-1 hover:bg-muted disabled:opacity-40"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+          <span className="mx-1 h-4 w-px bg-border" />
+          <button
+            type="button"
+            title="הקטן"
+            onClick={zoomOut}
+            disabled={scale <= MIN_SCALE}
+            className="rounded p-1 hover:bg-muted disabled:opacity-40"
+          >
+            <ZoomOut className="size-4" />
+          </button>
+          <button
+            type="button"
+            title="איפוס שינוי גודל"
+            onClick={zoomReset}
+            className="min-w-[3rem] rounded px-1 py-0.5 text-center font-mono hover:bg-muted"
+          >
+            {Math.round(scale * 100)}%
+          </button>
+          <button
+            type="button"
+            title="הגדל"
+            onClick={zoomIn}
+            disabled={scale >= MAX_SCALE}
+            className="rounded p-1 hover:bg-muted disabled:opacity-40"
+          >
+            <ZoomIn className="size-4" />
+          </button>
+          <button
+            type="button"
+            title="התאם לרוחב"
+            onClick={fitWidth}
+            className="rounded p-1 hover:bg-muted"
+          >
+            <Maximize2 className="size-4" />
+          </button>
+          <button
+            type="button"
+            title="ברירת מחדל"
+            onClick={zoomReset}
+            className="rounded p-1 hover:bg-muted"
+          >
+            <RotateCcw className="size-4" />
+          </button>
+        </div>
         {reanchorId && (
           <div
             dir="rtl"
