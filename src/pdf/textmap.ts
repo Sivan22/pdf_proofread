@@ -129,14 +129,51 @@ function stripNikkudGlyphsInBlock(raw: RawBlock): void {
  * ש (with shin/sin dot baked in), X is י, the rest are vocalisation glyphs.
  * Add more entries here as we encounter new fonts.
  */
+/**
+ * Glyph-slot map for the Z_FR / Z_Vilna / Z_Margalit Hebrew typesetting
+ * fonts (Bnei-Baruch / "Hasulam" lineage). Derived from the publisher's
+ * own `Z_PREVIW.MAP` font definition: the font hosts dagesh-bearing /
+ * shin-dot / vowel-aware letterforms in ASCII codepoints, so the byte
+ * mupdf reports back doesn't directly mean its ASCII letter.
+ *
+ * Every entry below is the consonant the slot represents — dagesh and
+ * shin/sin distinctions get folded back onto the bare letter, since
+ * proofreading only cares about consonants. ASCII bracket/punctuation
+ * slots (76, 78, 80, 100, 101, 102, 103) keep their normal meaning and
+ * are left out so they pass through unchanged.
+ */
+const Z_FONT_LETTER_MAP: Record<string, string> = {
+  A: 'ו', // vav with holam
+  B: 'ך', // final-kaf with sheva
+  C: 'ך', // final-kaf with qamats
+  F: 'ש', // shin with shin-dot (Rshin)
+  G: 'ש', // Rshin + dagesh
+  H: 'ש', // shin with sin-dot (Lshin)
+  I: 'ש', // Lshin + dagesh
+  Q: 'ב', // bet + dagesh
+  R: 'ג', // gimel + dagesh
+  S: 'ד', // dalet + dagesh
+  T: 'ה', // he + dagesh
+  U: 'ו', // vav + dagesh
+  V: 'ז', // zayin + dagesh
+  W: 'ט', // tet + dagesh
+  X: 'י', // yod + dagesh
+  Y: 'ך', // final-kaf + dagesh
+  Z: 'כ', // kaf + dagesh
+  '[': 'ל', // lamed + dagesh
+  '\\': 'מ', // mem + dagesh
+  ']': 'נ', // nun + dagesh
+  '^': 'ס', // samekh + dagesh
+  _: 'פ', // pe + dagesh
+  '`': 'צ', // sade + dagesh
+  a: 'ק', // qof + dagesh
+  c: 'ת', // tav + dagesh
+};
+
 const FONT_GLYPH_MAP: Record<string, Record<string, string>> = {
-  // Bnei-Baruch / Z_FR family — verified from page-1 verse "ויהי חיי שרה ...":
-  // F and H both render as ש (with the shin or sin dot baked in), X is a
-  // long-style י. Other ASCII-letter slots (U, Q, S, T, V, Z, J, A, B, _)
-  // are punctuation / cantillation glyphs that we'd rather drop than guess.
-  Z_FR: { F: 'ש', H: 'ש', X: 'י' },
-  Z_Vilna: { F: 'ש', H: 'ש', X: 'י' },
-  Z_Margalit: { F: 'ש', H: 'ש', X: 'י' },
+  Z_FR: Z_FONT_LETTER_MAP,
+  Z_Vilna: Z_FONT_LETTER_MAP,
+  Z_Margalit: Z_FONT_LETTER_MAP,
 };
 
 function fontGlyph(fontName: string, ch: string): string | undefined {
