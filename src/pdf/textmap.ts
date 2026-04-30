@@ -215,7 +215,37 @@ function median(values: number[]): number {
  * X-descending recovers it. JS sort is stable, so chars at equal X keep
  * stream order. Lines that aren't Hebrew-dominant are left alone so legitimate
  * LTR runs aren't reversed.
+ *
+ * After sorting RTL, embedded LTR sub-runs (digits, Latin letters) are
+ * reversed in place — the global RTL sort flips their internal order, so
+ * "12" inside a Hebrew sentence becomes "21" without this step.
  */
+function isLtrSubChar(c: RawChar): boolean {
+  const cp = c.ch.codePointAt(0) ?? 0;
+  return (
+    (cp >= 0x30 && cp <= 0x39) ||
+    (cp >= 0x41 && cp <= 0x5A) ||
+    (cp >= 0x61 && cp <= 0x7A)
+  );
+}
+function reverseLtrRuns(chars: RawChar[]): void {
+  let i = 0;
+  while (i < chars.length) {
+    if (!isLtrSubChar(chars[i])) {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < chars.length && isLtrSubChar(chars[j])) j++;
+    // Reverse [i, j) in place.
+    for (let lo = i, hi = j - 1; lo < hi; lo++, hi--) {
+      const tmp = chars[lo];
+      chars[lo] = chars[hi];
+      chars[hi] = tmp;
+    }
+    i = j;
+  }
+}
 function sortCharsByVisualOrder(chars: RawChar[]): void {
   if (chars.length < 2) return;
   let hebCount = 0;
@@ -231,6 +261,7 @@ function sortCharsByVisualOrder(chars: RawChar[]): void {
     const bx = (quadXMin(b.quad) + quadXMax(b.quad)) / 2;
     return bx - ax;
   });
+  reverseLtrRuns(chars);
 }
 
 /**
@@ -277,11 +308,23 @@ function cleanLine(chars: RawChar[]): RawChar[] {
     medH = median(letters.map((c) => quadYMax(c.quad) - quadYMin(c.quad)));
     medYMax = median(letters.map((c) => quadYMax(c.quad)));
   }
+  const isLetterCp = (cp: number): boolean =>
+    (cp >= 0x0590 && cp <= 0x05FF) ||
+    (cp >= 0x41 && cp <= 0x5A) ||
+    (cp >= 0x61 && cp <= 0x7A);
+  // A char is subordinate (visually attached, no space-worthy break) when its
+  // baseline is raised — that's a superscript / footnote ref. We do NOT mark
+  // letters subordinate purely by height, because mupdf often groups two
+  // different-size body lines (e.g. Aramaic + smaller Hebrew translation) at
+  // the same baseline; the smaller line is body text, not a superscript.
+  // Non-letter glyphs (vowel marks, raised dots, punctuation oddities) at
+  // half height *are* subordinate — they're decorations.
   const isSubordinate = (c: RawChar): boolean => {
     if (medH <= 0) return false;
+    const cp = c.ch.codePointAt(0) ?? 0;
     const h = quadYMax(c.quad) - quadYMin(c.quad);
-    if (h < medH * 0.7) return true;
     if (medYMax - quadYMax(c.quad) > medH * 0.25) return true;
+    if (!isLetterCp(cp) && h < medH * 0.5) return true;
     return false;
   };
 
@@ -462,7 +505,13 @@ export function extractPageContent(
       }
       curLine = null;
     },
-    onChar(ch, _origin, font, _size, quad) {
+    onChar(ch, _origin, font, size, quad) {
+      // Drop degenerate microscopic glyphs (some PDFs hide metadata text at
+      // corners with sub-point font size). Real text is at least ~5pt; we
+      // gate at 2pt to be safe. mupdf's bbox is also tiny in those cases.
+      if (typeof size === 'number' && size > 0 && size < 2) return;
+      const h = quadYMax(quad) - quadYMin(quad);
+      if (h > 0 && h < 1) return;
       const fontName = (font && typeof font.getName === 'function' ? font.getName() : '') ?? '';
       curLine?.chars.push({ ch, quad, font: fontName });
     },
