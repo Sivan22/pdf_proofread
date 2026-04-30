@@ -9,6 +9,9 @@ interface Props {
   pdfBlob: Blob | null;
   rows: ProofErrorRow[];
   batches: Map<number, BatchProgress>;
+  baseName: string;
+  /** Returns the bytes for the latest annotated PDF (built fresh from the current state). */
+  getAnnotatedPdf: () => Blob | null;
   onSaveRow: (id: string, patch: { text: string; error: string; fix: string }) => void;
   onDeleteRow: (id: string) => void;
   onReanchorRow: (id: string, rects: Rect[]) => void;
@@ -22,7 +25,16 @@ interface DrawState {
   curY: number;
 }
 
-export function ReviewTab({ pdfBlob, rows, batches, onSaveRow, onDeleteRow, onReanchorRow }: Props) {
+export function ReviewTab({
+  pdfBlob,
+  rows,
+  batches,
+  baseName,
+  getAnnotatedPdf,
+  onSaveRow,
+  onDeleteRow,
+  onReanchorRow,
+}: Props) {
   const viewerRef = useRef<PdfViewerHandle | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reanchorId, setReanchorId] = useState<string | null>(null);
@@ -262,6 +274,39 @@ export function ReviewTab({ pdfBlob, rows, batches, onSaveRow, onDeleteRow, onRe
             </span>
           )}
         </div>
+        {rows.length > 0 && (
+          <div className="flex gap-2 border-b px-3 py-2">
+            <button
+              type="button"
+              onClick={() => {
+                const blob = getAnnotatedPdf();
+                if (blob) triggerDownload(blob, `${baseName}_reviewed.pdf`);
+              }}
+              className="rounded-md border bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              הורד PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const errors = rows.map((r) => ({
+                  page: r.page,
+                  text: r.text,
+                  error: r.error,
+                  fix: r.fix,
+                  match: r.match,
+                }));
+                const blob = new Blob([JSON.stringify(errors, null, 2)], {
+                  type: 'application/json',
+                });
+                triggerDownload(blob, `${baseName}_errors.json`);
+              }}
+              className="rounded-md border bg-background px-3 py-1 text-xs font-medium hover:bg-muted"
+            >
+              הורד JSON
+            </button>
+          </div>
+        )}
         <div className="flex-1 space-y-2 overflow-y-auto p-2">
           {rows.length === 0 ? (
             <div className="p-4 text-center text-sm text-muted-foreground">
@@ -359,4 +404,15 @@ function cssRectToPdfRect(
   const y1 = pdfHeight - yUpMin;
   if (x1 - x0 < 1 || y1 - y0 < 1) return null;
   return { x0, y0, x1, y1 };
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

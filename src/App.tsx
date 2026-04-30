@@ -178,7 +178,11 @@ export default function App() {
         <h1 className="text-2xl font-semibold tracking-tight">PDF Proofread</h1>
       </header>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'setup' | 'review')}>
+      <Tabs
+        dir="rtl"
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as 'setup' | 'review')}
+      >
         <TabsList>
           <TabsTrigger value="setup">הגדרות</TabsTrigger>
           <TabsTrigger value="review" disabled={!file}>
@@ -219,6 +223,8 @@ export default function App() {
             pdfBlob={file}
             rows={rows}
             batches={batches}
+            baseName={baseName}
+            getAnnotatedPdf={getAnnotatedPdf}
             onSaveRow={onSaveRow}
             onDeleteRow={onDeleteRow}
             onReanchorRow={onReanchorRow}
