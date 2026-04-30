@@ -412,11 +412,14 @@ function cleanLine(chars: RawChar[]): RawChar[] {
       if (subBetweenMinX < Infinity) {
         gap -= subBetweenMaxX - subBetweenMinX;
       }
+      // A "duplicate" here is the typesetter rendering the same mark twice
+      // on top of itself — i.e. the two glyph rectangles **overlap** in X.
+      // Legitimate sequences like an ellipsis (...) leave a positive gap
+      // between dots; we must NOT collapse those, so require strict overlap.
       const dup =
         lastBody.ch === c.ch &&
         isPunct(c.ch) &&
-        quadXMin(lastBody.quad) - quadXMax(c.quad) <
-          (quadXMax(c.quad) - quadXMin(c.quad)) + 1;
+        quadXMin(lastBody.quad) < quadXMax(c.quad);
       if (dup) {
         // Drop this duplicate; lastBody stays.
         subBetweenMinX = Infinity;
