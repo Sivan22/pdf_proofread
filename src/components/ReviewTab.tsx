@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Maximize2,
   RotateCcw,
   ZoomIn,
@@ -9,6 +11,9 @@ import {
 } from 'lucide-react';
 import { PdfViewer, type PdfPageMeta, type PdfViewerHandle } from './PdfViewer';
 import { FixCard } from './FixCard';
+import { RunDetails } from './RunDetails';
+import { sumCallCosts } from '../ai/pricing';
+import { formatUsd } from '../lib/cost';
 import type { BatchProgress, ProofErrorRow } from '../runner/orchestrator';
 import type { Rect } from '../pdf/mupdf';
 
@@ -50,6 +55,7 @@ export function ReviewTab({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reanchorId, setReanchorId] = useState<string | null>(null);
   const [drawMode, setDrawMode] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const drawState = useRef<DrawState | null>(null);
   const [, forceTick] = useState(0);
   const [scale, setScale] = useState(DEFAULT_SCALE);
@@ -297,27 +303,61 @@ export function ReviewTab({
     (b) => b.status === 'done' || b.status === 'error',
   ).length;
   const progressErr = [...batches.values()].filter((b) => b.status === 'error').length;
+  const settledCosts = [...batches.values()]
+    .map((b) => b.cost)
+    .filter((c): c is NonNullable<typeof c> => !!c);
+  const totalCost = settledCosts.length ? sumCallCosts(settledCosts) : null;
 
   return (
     <div dir="rtl" className="grid h-[80vh] grid-cols-[360px_1fr] gap-3">
       <div className="flex h-full flex-col overflow-hidden rounded-md border">
-        <div className="flex items-center justify-between border-b px-3 py-2 text-xs">
+        <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
           <span className="font-medium text-sm">
             תיקונים ({rows.length})
           </span>
-          {batches.size > 0 && (
-            <span
-              className={
-                progressErr > 0
-                  ? 'text-destructive'
-                  : 'text-muted-foreground'
-              }
-            >
-              {progressDone}/{batches.size} קבוצות
-              {progressErr > 0 && ` · ${progressErr} שגיאות`}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {batches.size > 0 && (
+              <span
+                className={
+                  progressErr > 0
+                    ? 'text-destructive'
+                    : 'text-muted-foreground'
+                }
+              >
+                {progressDone}/{batches.size}
+                {progressErr > 0 && ` · ${progressErr} שגיאות`}
+              </span>
+            )}
+            {batches.size > 0 && (
+              <button
+                type="button"
+                onClick={() => setDetailsOpen((o) => !o)}
+                aria-expanded={detailsOpen}
+                aria-controls="run-details-panel"
+                className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 font-mono hover:bg-muted"
+                title={
+                  totalCost
+                    ? totalCost.source === 'gateway-exact'
+                      ? 'עלות מדויקת לפי Vercel AI Gateway'
+                      : 'הערכת עלות לפי מחירון פומבי'
+                    : 'אין עדיין נתוני עלות'
+                }
+              >
+                {totalCost ? formatUsd(totalCost.totalUsd) : '—'}
+                {detailsOpen ? (
+                  <ChevronDown className="size-3" />
+                ) : (
+                  <ChevronUp className="size-3" />
+                )}
+              </button>
+            )}
+          </div>
         </div>
+        {detailsOpen && batches.size > 0 && (
+          <div id="run-details-panel" className="border-b">
+            <RunDetails batches={batches} />
+          </div>
+        )}
         {rows.length > 0 && (
           <div className="flex gap-2 border-b px-3 py-2">
             <button

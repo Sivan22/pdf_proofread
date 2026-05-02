@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronLeft, Heart, ListChecks } from 'lucide-react';
+import { Heart } from 'lucide-react';
 import * as mupdf from 'mupdf';
+import { CollapsibleLogs } from './components/CollapsibleLogs';
 import { FileDrop } from './components/FileDrop';
 import { MugahPromo } from './components/MugahPromo';
 import { Parameters } from './components/Parameters';
-import { ProgressLog } from './components/ProgressLog';
 import { PromptEditor } from './components/PromptEditor';
 import { Results } from './components/Results';
 import { CostSummary } from './components/CostSummary';
@@ -13,7 +13,6 @@ import { ReviewTab } from './components/ReviewTab';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Alert, AlertDescription } from './components/ui/alert';
 import { Button } from './components/ui/button';
-import { Card } from './components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { isRouteModelValid } from './ai/providers';
 import {
@@ -293,29 +292,3 @@ export default function App() {
   );
 }
 
-function CollapsibleLogs({ batches }: { batches: Map<number, BatchProgress> }) {
-  const [open, setOpen] = useState(false);
-  if (batches.size === 0) return null;
-  const list = [...batches.values()];
-  const done = list.filter((b) => b.status === 'done' || b.status === 'error').length;
-  return (
-    <Card>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between gap-2 rounded-xl px-6 py-3 text-start text-sm font-medium hover:bg-accent/40"
-      >
-        <span className="flex items-center gap-2">
-          <ListChecks className="size-4" />
-          יומן הרצה ({done} / {list.length})
-        </span>
-        {open ? <ChevronDown className="size-4" /> : <ChevronLeft className="size-4" />}
-      </button>
-      {open && (
-        <div className="px-2 pb-3">
-          <ProgressLog batches={batches} />
-        </div>
-      )}
-    </Card>
-  );
-}
