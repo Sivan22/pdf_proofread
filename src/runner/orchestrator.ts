@@ -2,6 +2,8 @@ import * as mupdf from 'mupdf';
 import { createModel } from '../ai/providers';
 import { analyzePages } from '../ai/analyze';
 import type { AnalyzePage } from '../ai/analyze';
+import { emptyCallCost, sumCallCosts } from '../ai/pricing';
+import type { CallCost } from '../ai/pricing';
 import { generateBatches } from '../pdf/batches';
 import {
   HIGHLIGHT_EXACT,
@@ -26,6 +28,8 @@ export interface BatchProgress {
   status: BatchStatus;
   errorsFound?: number;
   errorMessage?: string;
+  /** Cost for this batch's single LLM call. Set when status is `done`. */
+  cost?: CallCost;
 }
 
 /**
@@ -46,11 +50,17 @@ export interface ProofErrorRow {
   annot: mupdf.PDFAnnotation | null;
 }
 
+export interface RunSummary {
+  batchesRun: number;
+  pagesScanned: number;
+  cost: CallCost;
+}
+
 export interface RunHandle {
   doc: mupdf.PDFDocument;
   originalPdf: Blob;
-  /** Resolves with batch summary when the run finishes (or aborts cleanly). */
-  done: Promise<{ batchesRun: number; pagesScanned: number }>;
+  /** Resolves with batch summary (incl. total cost) when the run finishes or aborts cleanly. */
+  done: Promise<RunSummary>;
 }
 
 export interface RunOptions {
@@ -107,6 +117,7 @@ export async function startProofread(opts: RunOptions): Promise<RunHandle> {
     };
 
     let nextRowId = 0;
+    const callCosts: CallCost[] = [];
 
     await Promise.all(
       batches.map((pageNums, index) =>
@@ -132,14 +143,16 @@ export async function startProofread(opts: RunOptions): Promise<RunHandle> {
               };
             });
             const prompt = buildPrompt(settings.prompt, pageNums, existing);
-            const errs = await analyzePages({
+            const { errors: errs, cost } = await analyzePages({
               model,
               modelName: settings.model,
+              route: settings.route,
               pages,
               pageNums,
               prompt,
               abortSignal,
             });
+            callCosts.push(cost);
 
             const rows: ProofErrorRow[] = [];
             for (const e of errs) {
@@ -193,7 +206,7 @@ export async function startProofread(opts: RunOptions): Promise<RunHandle> {
             }
             buffered.set(index, rows);
             flushReady();
-            onProgress({ index, pageNums, status: 'done', errorsFound: rows.length });
+            onProgress({ index, pageNums, status: 'done', errorsFound: rows.length, cost });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             buffered.set(index, null);
@@ -204,7 +217,8 @@ export async function startProofread(opts: RunOptions): Promise<RunHandle> {
       ),
     );
 
-    return { batchesRun: batches.length, pagesScanned: endIdx - startIdx };
+    const total = callCosts.length ? sumCallCosts(callCosts) : emptyCallCost('estimated');
+    return { batchesRun: batches.length, pagesScanned: endIdx - startIdx, cost: total };
   })();
 
   return { doc, originalPdf, done };

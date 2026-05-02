@@ -7,6 +7,8 @@ import { Parameters } from './components/Parameters';
 import { ProgressLog } from './components/ProgressLog';
 import { PromptEditor } from './components/PromptEditor';
 import { Results } from './components/Results';
+import { CostSummary } from './components/CostSummary';
+import { RunHistory } from './components/RunHistory';
 import { ReviewTab } from './components/ReviewTab';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Alert, AlertDescription } from './components/ui/alert';
@@ -29,6 +31,12 @@ import { startProofread } from './runner/orchestrator';
 import type { BatchProgress, ProofErrorRow } from './runner/orchestrator';
 import { DEFAULT_PROMPT } from './runner/prompt';
 import { loadSettings, saveSettings, type Settings } from './store/settings';
+import {
+  appendRunRecord,
+  clearRunHistory,
+  loadRunHistory,
+  type RunRecord,
+} from './store/runHistory';
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -39,6 +47,7 @@ export default function App() {
   const [rows, setRows] = useState<ProofErrorRow[]>([]);
   const [activeTab, setActiveTab] = useState<'setup' | 'review'>('setup');
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<RunRecord[]>(() => loadRunHistory());
   const abortRef = useRef<AbortController | null>(null);
   const docRef = useRef<mupdf.PDFDocument | null>(null);
 
@@ -108,13 +117,34 @@ export default function App() {
           setRows((prev) => [...prev, ...newRows]),
       });
       docRef.current = handle.doc;
-      await handle.done;
+      const summary = await handle.done;
+      if (summary.batchesRun > 0 && file) {
+        const record: RunRecord = {
+          timestamp: Date.now(),
+          fileName: file.name,
+          route: settings.route,
+          model: settings.model,
+          pageRange: `${settings.startPage ?? 1}-${settings.endPage ?? '?'}`,
+          batchesRun: summary.batchesRun,
+          pagesScanned: summary.pagesScanned,
+          totalUsd: summary.cost.totalUsd,
+          source: summary.cost.source,
+          tokens: summary.cost.tokens,
+        };
+        appendRunRecord(record);
+        setHistory((h) => [record, ...h].slice(0, 50));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
       abortRef.current = null;
     }
+  };
+
+  const onClearHistory = () => {
+    clearRunHistory();
+    setHistory([]);
   };
 
   const onCancel = () => abortRef.current?.abort();
@@ -216,7 +246,9 @@ export default function App() {
             )}
 
             <CollapsibleLogs batches={batches} />
+            <CostSummary batches={batches} />
             <Results rows={rows} baseName={baseName} getAnnotatedPdf={getAnnotatedPdf} />
+            <RunHistory history={history} onClear={onClearHistory} />
           </div>
         </TabsContent>
 

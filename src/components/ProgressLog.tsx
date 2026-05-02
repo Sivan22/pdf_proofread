@@ -1,6 +1,7 @@
 import { Check, X } from 'lucide-react';
 import type { BatchProgress } from '../runner/orchestrator';
 import { Card, CardContent } from './ui/card';
+import { formatUsd } from '../lib/cost';
 
 interface Props {
   batches: Map<number, BatchProgress>;
@@ -11,12 +12,14 @@ export function ProgressLog({ batches }: Props) {
   const list = [...batches.values()].sort((a, b) => a.index - b.index);
   const done = list.filter((b) => b.status === 'done' || b.status === 'error').length;
   const totalErrors = list.reduce((sum, b) => sum + (b.errorsFound ?? 0), 0);
+  const totalCost = list.reduce((sum, b) => sum + (b.cost?.totalUsd ?? 0), 0);
 
   return (
     <Card>
       <CardContent className="pt-6">
         <div className="mb-2 text-sm font-medium">
           {done} / {list.length} קבוצות · {totalErrors} טעויות
+          {totalCost > 0 && <> · עלות {formatUsd(totalCost)}</>}
         </div>
         <ul className="m-0 max-h-52 list-none overflow-y-auto p-0">
           {list.map((b) => (
@@ -48,6 +51,7 @@ function Row({ b }: { b: BatchProgress }) {
         <span className="inline-flex items-center gap-1.5">
           <Check className="size-3.5 text-primary" />
           {range} · {b.errorsFound ?? 0} טעויות
+          {b.cost && <span className="text-muted-foreground"> · {formatUsd(b.cost.totalUsd)}</span>}
         </span>
       );
     case 'error':

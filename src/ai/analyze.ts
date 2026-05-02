@@ -1,7 +1,9 @@
 import { generateText } from 'ai';
 import type { LanguageModel, UserContent } from 'ai';
-import type { Model } from '../store/settings';
+import type { Model, Route } from '../store/settings';
 import type { ProofError } from '../pdf/mupdf';
+import { computeCallCost } from './pricing';
+import type { CallCost } from './pricing';
 
 type JSONValue = string | number | boolean | null | { [k: string]: JSONValue } | JSONValue[];
 type ProviderOptions = Record<string, { [k: string]: JSONValue }>;
@@ -41,15 +43,21 @@ function highThinkingOptions(model: Model): ProviderOptions {
   }
 }
 
+export interface AnalyzeResult {
+  errors: Omit<ProofError, 'match'>[];
+  cost: CallCost;
+}
+
 export async function analyzePages(args: {
   model: LanguageModel;
   modelName: Model;
+  route: Route;
   pages: AnalyzePage[];
   pageNums: number[];
   prompt: string;
   abortSignal?: AbortSignal;
-}): Promise<Omit<ProofError, 'match'>[]> {
-  const { model, modelName, pages, pageNums, prompt, abortSignal } = args;
+}): Promise<AnalyzeResult> {
+  const { model, modelName, route, pages, pageNums, prompt, abortSignal } = args;
 
   const content: UserContent = [{ type: 'text', text: prompt }];
   for (const page of pages) {
@@ -76,29 +84,36 @@ export async function analyzePages(args: {
     messages: [{ role: 'user', content }],
   });
 
+  const cost = computeCallCost({
+    route,
+    model: modelName,
+    usage: result.usage,
+    providerMetadata: result.providerMetadata,
+  });
+
   const text = result.text.trim();
-  if (!text || text === '[]' || text === 'אין') return [];
+  if (!text || text === '[]' || text === 'אין') return { errors: [], cost };
 
   const match = text.match(/\[[\s\S]*\]/);
-  if (!match) return [];
+  if (!match) return { errors: [], cost };
 
   let parsed: RawError[];
   try {
     parsed = JSON.parse(match[0]) as RawError[];
   } catch {
-    return [];
+    return { errors: [], cost };
   }
 
-  const out: Omit<ProofError, 'match'>[] = [];
+  const errors: Omit<ProofError, 'match'>[] = [];
   for (const e of parsed) {
     const local = typeof e.page === 'number' ? e.page : 1;
     const idx = local >= 1 && local <= pageNums.length ? local - 1 : 0;
-    out.push({
+    errors.push({
       page: pageNums[idx] + 1,
       text: e.text ?? '',
       error: e.error ?? '',
       fix: e.fix ?? '',
     });
   }
-  return out;
+  return { errors, cost };
 }
