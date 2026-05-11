@@ -18,7 +18,8 @@ export interface RawError {
 export interface AnalyzePage {
   /** 1-indexed page number within the batch (used to label pages in the prompt). */
   localPageNum: number;
-  imagePng: Uint8Array;
+  image: Uint8Array;
+  imageMediaType: 'image/png' | 'image/jpeg';
   /** Block-formatted extracted text. May be empty when text extraction failed. */
   text: string;
 }
@@ -62,7 +63,7 @@ export async function analyzePages(args: {
   const content: UserContent = [{ type: 'text', text: prompt }];
   for (const page of pages) {
     content.push({ type: 'text', text: `\n=== עמוד ${page.localPageNum} ===\n` });
-    content.push({ type: 'image', image: page.imagePng, mediaType: 'image/png' });
+    content.push({ type: 'image', image: page.image, mediaType: page.imageMediaType });
     if (page.text.trim()) {
       content.push({
         type: 'text',

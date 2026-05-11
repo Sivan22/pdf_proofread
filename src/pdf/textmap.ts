@@ -17,13 +17,40 @@ export interface TextBlock {
   quads: (mupdf.Quad | null)[];
 }
 
+export type ImageMediaType = 'image/png' | 'image/jpeg';
+
 export interface PageContent {
   pageIdx: number;
   pageNum: number;
   blocks: TextBlock[];
-  imagePng: Uint8Array;
+  image: Uint8Array;
+  imageMediaType: ImageMediaType;
   width: number;
   height: number;
+}
+
+// Anthropic's API rejects images above 5 MB. We aim a touch lower so a single
+// large render doesn't bump up against the boundary; if a PNG exceeds this we
+// fall back to JPEG with decreasing quality until it fits.
+const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
+const JPEG_QUALITY_LADDER = [92, 80, 70, 60, 50];
+
+function encodePixmapForLLM(pixmap: mupdf.Pixmap): {
+  image: Uint8Array;
+  imageMediaType: ImageMediaType;
+} {
+  const png = pixmap.asPNG();
+  if (png.byteLength <= MAX_IMAGE_BYTES) {
+    return { image: png, imageMediaType: 'image/png' };
+  }
+  let last: Uint8Array | null = null;
+  for (const quality of JPEG_QUALITY_LADDER) {
+    last = pixmap.asJPEG(quality);
+    if (last.byteLength <= MAX_IMAGE_BYTES) {
+      return { image: last, imageMediaType: 'image/jpeg' };
+    }
+  }
+  return { image: last!, imageMediaType: 'image/jpeg' };
 }
 
 export interface TextMatch {
@@ -527,7 +554,7 @@ export function extractPageContent(
     'View',
     'MediaBox',
   );
-  const imagePng = pixmap.asPNG();
+  const { image, imageMediaType } = encodePixmapForLLM(pixmap);
   const width = pixmap.getWidth();
   const height = pixmap.getHeight();
 
@@ -575,7 +602,7 @@ export function extractPageContent(
     if (tb) blocks.push(tb);
   }
 
-  return { pageIdx, pageNum: pageIdx + 1, blocks, imagePng, width, height };
+  return { pageIdx, pageNum: pageIdx + 1, blocks, image, imageMediaType, width, height };
 }
 
 function assembleBlock(index: number, raw: RawBlock): TextBlock | null {

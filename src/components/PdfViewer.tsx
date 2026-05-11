@@ -266,7 +266,7 @@ function PdfPage({
       const pc = extractPageContent(doc, meta.pageNum - 1, dpi);
       if (cancelled) return;
       url = URL.createObjectURL(
-        new Blob([pc.imagePng as BlobPart], { type: 'image/png' }),
+        new Blob([pc.image as BlobPart], { type: pc.imageMediaType }),
       );
       setImageUrl(url);
       setPageContent(pc);

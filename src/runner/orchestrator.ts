@@ -138,7 +138,8 @@ export async function startProofread(opts: RunOptions): Promise<RunHandle> {
               }
               return {
                 localPageNum: i + 1,
-                imagePng: pc.imagePng,
+                image: pc.image,
+                imageMediaType: pc.imageMediaType,
                 text: formatBlocksForLLM(pc.blocks),
               };
             });
